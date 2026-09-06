@@ -171,12 +171,33 @@ the layout before drilling.
 | `~/src/punak/KanoopPiQt` | IO library, overhauled in place, added as a submodule |
 | `~/src/punak/rpi/meta-rpi4-irrigation` | Yocto layer |
 
-Submodules built `EXCLUDE_FROM_ALL`, following `kanooptorrentd-mains`:
-`KanoopCommonQt`, `KanoopDatabaseQt`, `KanoopPiQt`.
+Submodules built `EXCLUDE_FROM_ALL`, following `meta-qt-mains`:
+
+| Submodule | Used by the daemon for |
+|---|---|
+| `KanoopCommonQt` | `Log` and `LoggingBaseClass`; `AppSettings` as the settings base; `AbstractThreadClass` for worker threads; `LockingQueue`, `MutexEvent`, `PathUtil`, `DateTimeUtil` |
+| `KanoopDatabaseQt` | `DataSource` and the versioned-migration framework |
+| `KanoopPiQt` | GPIO |
+
+`KanoopCommonQt` is a direct dependency of `irrigationd`, not only of
+`KanoopPiQt`.
 
 The frontend lives inside the superproject rather than a separate `-web`
-repository. It is a static bundle with no independent deploy story; the
-`kanooptorrentd-web` split exists because that project has a real Python backend.
+repository. It is a static bundle with no deploy story of its own and no use
+without `irrigationd`.
+
+### 3.1 Reference implementations
+
+All patterns come from `~/src/epc/meta-qt-mains`.
+
+| Concern | Reference |
+|---|---|
+| Superproject CMake | `CMakeLists.txt` |
+| C++ style | `.claude/docs/codestyle-cpp.md` |
+| Threaded REST server on `QHttpServer` | `libEpcSimQt/include/epc/sim/tau/somrestserver.h` and its `.cpp` |
+| Worker threads | `AbstractThreadClass` subclasses under `libEpcCommonQt/include/epc/network/` |
+| Thread teardown | `.claude/docs/httpop-teardown-contract.md` |
+| Schema versioning and migration | `libEpcCommonQt/include/epc/database/epcdatasource.h`, `.claude/docs/db-migration-architecture.md` |
 
 ## 4. KanoopPiQt v2
 
@@ -228,7 +249,7 @@ contract.
 
 ## 5. Daemon architecture
 
-Source layout under `IrrigationD/src/`, following `KanoopTorrentD`:
+Source layout under `IrrigationD/src/`:
 
 ```
 main.cpp                        QCoreApplication, CLI flags, logging, signal handling
@@ -238,7 +259,7 @@ scheduler.{h,cpp}               Resolves programs into due instants
 programrunner.{h,cpp}           Executes one program's zone sequence
 stopbutton.{h,cpp}              InputPin wrapper
 irrigationcontrolserver.{h,cpp} QHttpServer REST surface
-settings.{h,cpp}                INI-backed configuration
+settings.{h,cpp}                Kanoop::AppSettings subclass
 database/                       DataSource, schema.sql, migrate/
 json/                           Request and response bodies
 ```
@@ -264,9 +285,35 @@ The systemd unit uses `Restart=always`.
 
 ### 5.2 Threading
 
-Single-threaded on the main Qt event loop. `QHttpServer`, all timers, and the
-libgpiod edge file descriptor are serviced there. GPIO writes take microseconds.
-No worker threads, no mutexes, no cross-thread connections.
+`ZoneController` owns every GPIO line and `Scheduler` owns the firing decision.
+Both live on the main event loop along with the libgpiod edge descriptor and all
+timers, so valve state has a single owner that never races itself.
+
+Everything that blocks, listens, or reaches the network is an
+`AbstractThreadClass` subclass from `KanoopCommonQt`, shaped like `SomRestServer`
+in `libEpcSimQt`: `threadStarted()` constructs the owned objects on the worker
+thread and `threadFinished()` tears them down. `IrrigationControlServer` is one
+of these, running its `QHttpServer` and every route handler on its own thread.
+The deferred weather client is the next.
+
+Traffic in both directions goes through signals. A route handler never calls
+`ZoneController`; it emits, and the slot executes on the thread that owns the
+valves. A setter called from another thread emits a request signal rather than
+writing member state that a route handler also touches.
+
+`QSqlDatabase` connections cannot be shared across threads, so the control
+server opens its own named connection through `DataSource::setConnectionName()`.
+
+Three `AbstractThreadClass` contracts govern teardown:
+
+- `start()` reports that the thread started, not that initialisation succeeded.
+  Post-start readiness is a separate query on the object.
+- `stop()`'s default timeout blocks until the worker signals. Destructors depend
+  on that, because they delete members the worker may still be reading.
+- Never destroy one with `deleteLater()`. Its thread is gone by then and the
+  deferred delete is posted to a queue nothing will drain.
+
+See `.claude/docs/httpop-teardown-contract.md` in `meta-qt-mains`.
 
 ### 5.3 Time handling
 
@@ -331,8 +378,20 @@ active runner.
 
 ## 6. Data model
 
-SQLite via `KanoopDatabaseQt`. `schema.sql` is the frozen v1 baseline; all
-subsequent changes ship as numbered scripts under `migrate/<N>/`.
+SQLite via `KanoopDatabaseQt`'s `DataSource`. `IrrigationDataSource` supplies the
+versioning layer in the shape of `EpcDataSource`: the compiled version is a
+constant in `IrrigationD/CMakeLists.txt`, the version last migrated to is stored
+in an info table in the database, and scripts live at
+`src/database/migrate/irrigation/<version>/NN-<name>.sql`, registered in a `.qrc`.
+
+Every schema change touches two paths that must stay in sync: the fresh-install
+script `schema.sql` and the migration script. Updating only one produces a
+database that looks healthy until the first query against the column that is
+missing from it.
+
+A migration that throws renames the database to `<file>.<utc>.backup` and
+recreates it from `schema.sql`. Test each migration against a populated database
+before it ships.
 
 ```
 zones                 id, number (1-8), name, enabled
@@ -423,7 +482,7 @@ Recipes:
 
 | Recipe | Purpose |
 |---|---|
-| `irrigationd_1.0.bb` | Cross-builds the daemon. `DEPENDS = "qtbase qthttpserver libgpiod"`, git `SRC_URI` with pinned `SRCREV` |
+| `irrigationd_1.0.bb` | Cross-builds the daemon. `DEPENDS = "qtbase qthttpserver libgpiod"`, `gitsm://` `SRC_URI` with pinned `SRCREV` |
 | `irrigation-web_1.0.bb` | Installs `web/dist` to `/var/www/irrigation/html`, fails the build if the bundle is absent |
 | `nginx-irrigation-config_1.0.bb` | Static bundle plus `/api` reverse proxy |
 | `irrigation-init_1.0.bb` | `config.txt` fragment, systemd unit, `/var/lib/irrigationd` |
@@ -431,6 +490,19 @@ Recipes:
 
 `PREFERRED_VERSION_libgpiod = "2.2.2"`. meta-oe carries 1.6.5 and 2.2.2 side by
 side and their APIs are not compatible.
+
+The `SRC_URI` uses `gitsm://` rather than `git://`. The Kanoop libraries are
+consumed as submodules through `add_subdirectory`, so a plain git fetch produces
+a source tree that configures and then fails to link.
+
+```
+PACKAGECONFIG:append:pn-qtbase = " sql-sqlite"
+```
+
+meta-qt6 enables the SQLite driver only through `PACKAGECONFIG_KDE`, which is
+gated on the `kde` distro feature. A headless image does not set it, so qtbase
+builds with no SQL drivers at all and `QSqlDatabase::addDatabase("QSQLITE")`
+fails at runtime with a clean build and no warning.
 
 `config.txt` fragment:
 
