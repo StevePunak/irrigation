@@ -1,0 +1,471 @@
+# Irrigation Controller — Design
+
+**Date:** 2026-09-05
+**Status:** Approved for implementation planning
+
+## 1. Overview
+
+Replace an Orbit 57894 four-station irrigation controller with a Raspberry Pi 4B
+driving eight 24VAC solenoid valves, scheduled by a headless Qt daemon and
+configured through a locally served web interface.
+
+### Goals
+
+- Feature parity with the Orbit: multiple named programs, per-zone run
+  durations, day selection (days-of-week, odd, even, every-N-days), multiple
+  start times per program, sequential zone execution.
+- Manual zone runs, rain delay, global disable, and a physical stop control.
+- Web UI reachable from any device on the LAN, no authentication.
+- Unattended operation across power cuts and network outages.
+
+### Non-goals for v1
+
+Designed around but deliberately deferred: weather-aware skip, run history and
+reporting, flow sensing and leak detection, master valve or pump-start output,
+remote access beyond the LAN, user accounts.
+
+## 2. Hardware
+
+### 2.1 Existing system
+
+The Orbit 57894 is a 120V plug-in indoor/outdoor controller with an internal
+transformer driving standard 24VAC solenoids. Maximum load is 250mA per station
+and 500mA total. Three of its four stations are in use. The system shutoff is a
+manual ball valve teed from a hose bib; there is no master valve and no pump.
+
+The Orbit is retained intact as a fallback controller. Nothing is salvaged from
+it.
+
+### 2.2 Bill of materials
+
+| Item | Part |
+|---|---|
+| Controller | Raspberry Pi 4B |
+| Relay board | SunFounder 5V 8-channel, opto-isolated, SPDT |
+| Transformer | 24VAC 40VA control transformer, multi-tap 120/208/240V primary, foot mount |
+| Logic supply | Mean Well HDR-15-5 (5V, 2.4A, DIN rail) |
+| Pi power | USB-C pigtail, bare wire to USB-C male, 20AWG |
+| RTC | DS3231 + AT24C32 module (ZS-042), CR2032 cell |
+| Enclosure | QILIPSU IP67 ABS, 285 x 195 x 130 mm, opaque grey hinged cover, plastic mounting plate |
+| Rail | 35mm slotted aluminium DIN rail, cut to ~250 mm |
+| Terminals | DIN terminal block kit with connection bars and end stops |
+| Mains entry | 14/3 pigtail cord, NEMA 5-15P, open end |
+| Glands | IP68 nylon cord grips, PG7-PG16 assortment |
+| Vent | IP68 M12x1.5 breather vent |
+| Protection | 5x20mm inline fuse holders; 1A slow-blow (primary), 1A fast-blow (secondary) |
+| Stop control | 16mm IP67 momentary pushbutton, 1NO, 304 stainless |
+
+### 2.3 Power distribution
+
+A single 120V cord enters through a cord grip on the bottom face and lands on a
+fused terminal block, 1A slow-blow on the hot leg. Slow-blow is required: a
+40VA transformer's inrush current will destroy a fast-blow fuse of this rating
+on first energisation.
+
+Two loads run in parallel from that block:
+
+- **Transformer primary**, landed on the **120V tap**. The 208V and 240V taps
+  are capped and heat-shrunk.
+- **HDR-15-5 primary.** Its 5V output feeds the Pi through a USB-C pigtail so
+  the Pi's own input protection stays in circuit, and feeds the relay board's
+  `JD-VCC` directly with the board jumper removed, so relay coil inrush cannot
+  sag the Pi's rail. Trim the supply to approximately 5.1V to offset cable drop.
+
+The transformer's metal frame is bonded to the cord ground. The enclosure is
+non-conductive and requires no bonding. The circuit feeding the box must be
+GFCI protected.
+
+Load budget: Pi 4B headless 0.6-0.9A steady with a ~1.2A boot peak, one relay
+coil and opto ~90mA, RTC negligible. Approximately 1.0A against a 2.4A supply.
+
+### 2.4 Valve wiring
+
+One transformer secondary leg lands on the valve-common bus terminal. The other
+is bussed across all eight relay COM poles. Each relay NO output goes to one
+zone wire on a DIN terminal block. Closing a relay completes the circuit and
+opens the solenoid.
+
+The secondary is fused at 1A. The open-frame transformer has no thermal
+protection of its own; a shorted solenoid or a severed field wire would
+otherwise be dissipated inside a sealed enclosure.
+
+Zones are numbered 1-8 and consume all eight relay channels. Adding a master
+valve later requires either reducing to seven zones or a second relay board.
+
+### 2.5 GPIO assignment
+
+| Function | BCM line |
+|---|---|
+| Zones 1-8 | 5, 6, 13, 16, 19, 20, 21, 26 |
+| Stop button | 25 |
+| RTC I2C | 2 (SDA), 3 (SCL) |
+
+Zone lines are chosen to avoid boot-time alternate functions and to leave the
+I2C and UART console pins free.
+
+### 2.6 Boot-time valve safety
+
+The relay board is **low-level trigger with no polarity jumper**: pulling an IN
+pin low energises its relay and closes NO. Raspberry Pi GPIO lines come up as
+inputs, and lines 9-27 default to an internal pull-down, which the board reads
+as asserted. Without mitigation, every zone opens at power-up and stays open
+until the daemon starts.
+
+Two independent mitigations, both required:
+
+1. **10k pull-up resistors** from each IN pin to the relay board VCC. These
+   dominate the Pi's ~50k internal pulls and hold the inputs de-asserted during
+   the window before the bootloader runs, and whenever the daemon is not holding
+   the lines.
+2. **`gpio=5,6,13,16,19,20,21,26=op,dh` in `config.txt`**, applied by the
+   bootloader before userspace exists.
+
+The SunFounder datasheet contradicts itself on trigger polarity: its feature
+list claims a low input leaves the relay off, while its pinout section states a
+low input connects NO to COM. The pinout is correct. Verify on the bench with a
+meter before connecting 24V.
+
+### 2.7 Enclosure and environment
+
+Mounted outdoors but sheltered — under an eave, out of direct sun and rain.
+
+- Non-metallic enclosure. A metal box around the Pi's antenna makes the wifi
+  unusable. If the supplied mounting plate turns out to be steel, mount the Pi
+  toward a side wall on standoffs rather than centred on the plate, and confirm
+  signal strength before sealing the box.
+- All cable glands on the **bottom** face; a gland on the top face channels
+  water inward. Leave a drip loop in the mains cord outside the box.
+- Fit the **M12 breather vent** in the bottom face. A fully sealed box cycles
+  thermally each day, draws in humid air through any imperfection, and condenses
+  it on the coldest interior surface. The vent equalises pressure and passes
+  water vapour while blocking liquid and insects.
+- Do not over-torque the lid screws and do not seal the gasket with silicone.
+- Mount the transformer low, for weight and to keep its field away from the Pi.
+  The combined ~7W of waste heat holds the interior above the dew point.
+- Keep the mains section physically separated from the 24V and logic sections,
+  with its own covered terminal block.
+
+Internal panel area is roughly 265 x 175 mm and must accommodate the
+transformer, relay board (135 x 54 mm), Pi, DIN PSU, and terminal blocks. Plan
+the layout before drilling.
+
+### 2.8 Verify on assembly
+
+- Relay trigger polarity, with a meter, before 24V is connected.
+- Transformer primary tap.
+- Remove the ZS-042 charging resistor before fitting a CR2032. The module
+  trickle-charges its cell for a rechargeable LIR2032; a primary lithium cell on
+  that circuit leaks or vents.
+- Power the RTC from **3.3V**. Its SDA and SCL pull-ups tie to VCC, and 5V on
+  the Pi's I2C lines damages the GPIO bank.
+- Gland sizes against the actual cord and field bundle diameters.
+- Mounting plate material, and wifi signal strength with the lid closed.
+
+## 3. Repositories and components
+
+| Path | Contents |
+|---|---|
+| `~/src/punak/irrigation` | CMake superproject, `MAIN_PROJ = irrigation` |
+| `~/src/punak/irrigation/IrrigationD` | Daemon source, binary `irrigationd` |
+| `~/src/punak/irrigation/web` | React 19 + Vite + TypeScript frontend |
+| `~/src/punak/KanoopPiQt` | IO library, overhauled in place, added as a submodule |
+| `~/src/punak/rpi/meta-rpi4-irrigation` | Yocto layer |
+
+Submodules built `EXCLUDE_FROM_ALL`, following `kanooptorrentd-mains`:
+`KanoopCommonQt`, `KanoopDatabaseQt`, `KanoopPiQt`.
+
+The frontend lives inside the superproject rather than a separate `-web`
+repository. It is a static bundle with no independent deploy story; the
+`kanooptorrentd-web` split exists because that project has a real Python backend.
+
+## 4. KanoopPiQt v2
+
+### 4.1 Build conversion
+
+qmake to CMake, matching the `KanoopCommonQt` layout: `qt_add_library`,
+`-Wextra -Wall -Werror`, public headers under `include/Kanoop/pi/` consumed as
+`<Kanoop/pi/outputpin.h>`, a `libKanoopPi.pc.in`, and a `tests/` directory
+behind `BUILD_TESTING`. Links `Qt6::Core` and libgpiod v2 through pkg-config,
+and depends on `KanoopCommonQt` for `Log`.
+
+### 4.2 Legacy code
+
+`pigs.*`, `pigcommand.*`, and `gpioreader.*` are removed. They target the pigpio
+daemon, which does not function on Raspberry Pi 5.
+
+`i2c.*` and `devices/` (ADS1115, BMP280) move to `legacy/`, excluded from the
+build, to be ported when a consuming project needs them.
+
+### 4.3 API
+
+Five types, digital IO only:
+
+- **`GpioChip`** — RAII wrapper over `gpiod_chip`. Opens **by label**
+  (e.g. `pinctrl-bcm2711`) rather than by device index. The Pi 5 moves GPIO to
+  the RP1 southbridge and renumbers every chip on the system, so index-based
+  lookup silently targets different silicon across board revisions.
+- **`OutputBank`** — requests multiple lines in a single `gpiod_line_request`,
+  so a multi-line transition is one atomic `set_values()` call.
+- **`OutputPin`** — single-line convenience over the same machinery, with
+  `activeLow` as a construction parameter.
+- **`InputPin`** — pull-up bias, edge detection, and kernel-side debounce via
+  `gpiod_line_settings_set_debounce_period_us()`. The request file descriptor is
+  wrapped in a `QSocketNotifier` so edges arrive as Qt signals on the event loop.
+- **`IGpioBackend`** with `LibGpiodBackend` and `MockBackend`. The mock allows
+  the entire daemon to be unit tested on a development host with no GPIO
+  hardware present.
+
+### 4.4 Line release semantics
+
+libgpiod releases requested lines when the owning process exits, and a released
+line reverts to input. On an active-low relay board this opens every valve when
+the daemon terminates. The kernel offers no mechanism to latch an output state
+across process exit.
+
+The external pull-up resistors in section 2.6 are therefore load-bearing rather
+than defensive. This constraint belongs in the `OutputPin` header as a hardware
+contract.
+
+## 5. Daemon architecture
+
+Source layout under `IrrigationD/src/`, following `KanoopTorrentD`:
+
+```
+main.cpp                        QCoreApplication, CLI flags, logging, signal handling
+irrigationdaemon.{h,cpp}        Lifecycle owner
+zonecontroller.{h,cpp}          Sole owner of GPIO
+scheduler.{h,cpp}               Resolves programs into due instants
+programrunner.{h,cpp}           Executes one program's zone sequence
+stopbutton.{h,cpp}              InputPin wrapper
+irrigationcontrolserver.{h,cpp} QHttpServer REST surface
+settings.{h,cpp}                INI-backed configuration
+database/                       DataSource, schema.sql, migrate/
+json/                           Request and response bodies
+```
+
+### 5.1 ZoneController safety contract
+
+`ZoneController` is the only component that touches GPIO. It enforces four
+invariants regardless of caller:
+
+1. **Mutual exclusion.** `openZone(n, duration)` closes any currently open zone
+   in the same atomic `OutputBank` write.
+2. **No open without a deadline.** There is no overload that opens a zone
+   indefinitely. A single-shot timer closes it.
+3. **Duration clamp.** Requested durations are clamped to a configured ceiling.
+4. **Watchdog.** A periodic tick independently verifies that no zone is open
+   past its deadline and closes the bank if one is.
+
+`allOff()` is callable from any component and always takes precedence.
+
+Construction order is a hard requirement: `ZoneController` is constructed and
+drives all eight lines de-asserted before the scheduler or HTTP server exist.
+The systemd unit uses `Restart=always`.
+
+### 5.2 Threading
+
+Single-threaded on the main Qt event loop. `QHttpServer`, all timers, and the
+libgpiod edge file descriptor are serviced there. GPIO writes take microseconds.
+No worker threads, no mutexes, no cross-thread connections.
+
+### 5.3 Time handling
+
+Two distinct kinds of value, handled differently.
+
+**Instants are UTC.** Every recorded moment — the fired-instants ledger, log
+entries, API timestamps, and all future run history — is stored and transmitted
+as UTC. The scheduler's internal comparisons are UTC. The DS3231 and the system
+clock both run UTC.
+
+**Schedule rules are wall-clock.** A start time is stored as
+`minutes_after_midnight` in local time together with an IANA timezone
+identifier. Normalising a recurring rule to UTC at write time makes it drift by
+an hour at each DST transition, because the rule expresses an intention anchored
+to the local clock rather than a fixed offset.
+
+The timezone is consulted at exactly two boundaries: resolving a rule into
+today's UTC instant, and formatting for display.
+
+DST transitions are resolved explicitly using `QDateTime::TransitionResolution`
+(Qt 6.7+):
+
+- Spring forward, where the local time does not exist: `Reject`. The occurrence
+  is logged with outcome `missed`.
+- Fall back, where the local time occurs twice: `PreferBefore`. The program runs
+  once, on the earlier offset.
+
+**`tzdata` must be present in the image.** `QTimeZone` on a system with no zone
+database falls back to UTC without raising an error, which shifts every start
+time by the local offset while producing internally consistent logs.
+
+### 5.4 Scheduler
+
+A one-second tick evaluates each enabled program. For each start time, the
+scheduler resolves the rule into today's UTC instant, checks the day rule, the
+rain delay, and the global enable, then consults `fired_instants`.
+
+- Every instant that fires is persisted, making the scheduler idempotent across
+  restarts and backward clock steps.
+- An instant fires only within a two-minute grace window. A missed occurrence is
+  recorded with outcome `missed` and never caught up. Catch-up watering after an
+  outage delivers water at an arbitrary time of day.
+
+Day rules: `DaysOfWeek` (bitmask), `Odd`, `Even`, `EveryNDays` (interval plus
+anchor date).
+
+### 5.5 ProgramRunner
+
+A state machine walking a program's ordered zone list, advanced by
+`ZoneController::zoneClosed()` rather than a timer of its own, so timing has a
+single authority.
+
+One runner is active at a time. A program whose start time arrives while another
+is running is skipped and recorded with outcome `skipped_busy`. A manual run
+preempts a running program.
+
+### 5.6 Stop button
+
+`InputPin` on BCM 25 with pull-up bias, falling-edge detection, and 20ms
+kernel-side debounce. A press calls `ZoneController::allOff()` and aborts any
+active runner.
+
+## 6. Data model
+
+SQLite via `KanoopDatabaseQt`. `schema.sql` is the frozen v1 baseline; all
+subsequent changes ship as numbered scripts under `migrate/<N>/`.
+
+```
+zones                 id, number (1-8), name, enabled
+
+programs              id, name, enabled, day_mode, dow_mask,
+                      interval_days, anchor_date
+
+program_start_times   id, program_id, minutes_after_midnight, timezone
+
+program_zones         id, program_id, zone_id, sequence, duration_seconds
+
+fired_instants        id, program_id, start_time_id,
+                      scheduled_at_utc, outcome
+
+settings              key, value
+```
+
+`outcome` is one of `ran`, `skipped_busy`, `skipped_rain`, `missed`.
+
+`scheduled_at_utc` is an ISO-8601 UTC string. The unique key over
+(`program_id`, `start_time_id`, `scheduled_at_utc`) is what makes firing
+idempotent.
+
+`fired_instants` rows older than 90 days are pruned at startup.
+
+Settings keys: `rain_delay_until` (UTC), `master_enabled`, `max_zone_seconds`,
+`log_level`.
+
+Zone-to-GPIO mapping lives in the daemon's INI settings rather than the
+database. It describes the wiring of a particular box, so changing it must not
+require a schema migration.
+
+Storage durability: `journal_mode=WAL`, `synchronous=FULL`, and `/var/log` on
+tmpfs. The device is powered from an unswitched outlet and will lose power
+mid-write.
+
+## 7. REST API
+
+Served by `QHttpServer` on `127.0.0.1:8080`. nginx proxies `/api/*` to
+`/admin/*` and serves the frontend bundle from `/`.
+
+```
+GET    /admin/health
+GET    /admin/version
+GET    /admin/status
+GET    /admin/zones
+PUT    /admin/zones/{id}
+POST   /admin/zones/{id}/run          { "seconds": N }
+GET    /admin/programs
+POST   /admin/programs
+PUT    /admin/programs/{id}
+DELETE /admin/programs/{id}
+POST   /admin/programs/{id}/run
+POST   /admin/stop
+GET    /admin/settings
+PUT    /admin/settings
+```
+
+`/admin/status` is the UI's polling endpoint and returns the running zone,
+seconds remaining, the next scheduled occurrence, and the controller's timezone
+identifier alongside its UTC timestamps.
+
+## 8. Web interface
+
+React 19 + Vite + TypeScript in `web/`, built to `web/dist/`.
+
+Three screens:
+
+- **Now** — running zone with time remaining, next scheduled run, eight zone
+  tiles with a quick manual run, and a prominent stop control. Mobile-first with
+  large touch targets and high contrast for outdoor readability.
+- **Programs** — list, create, edit. Day rule, start times, ordered zone list
+  with durations, computed total runtime, next run.
+- **Settings** — rain delay, master enable, maximum zone runtime, zone names.
+
+Polling rather than websockets: `/admin/status` every 2s while a zone is
+running, every 15s otherwise.
+
+All times render in the **controller's** timezone as reported by
+`/admin/status`, not the viewing browser's.
+
+## 9. Yocto layer and deployment
+
+`~/src/punak/rpi/meta-rpi4-irrigation`, sibling to `meta-rpi4-gateway`, with
+`kas/rpi4-irrigation.yml`.
+
+Recipes:
+
+| Recipe | Purpose |
+|---|---|
+| `irrigationd_1.0.bb` | Cross-builds the daemon. `DEPENDS = "qtbase qthttpserver libgpiod"`, git `SRC_URI` with pinned `SRCREV` |
+| `irrigation-web_1.0.bb` | Installs `web/dist` to `/var/www/irrigation/html`, fails the build if the bundle is absent |
+| `nginx-irrigation-config_1.0.bb` | Static bundle plus `/api` reverse proxy |
+| `irrigation-init_1.0.bb` | `config.txt` fragment, systemd unit, `/var/lib/irrigationd` |
+| `rpi4-irrigation-image.bb` | `core-image-base` plus the above, avahi, sqlite3, tzdata, wpa-supplicant, SSH |
+
+`PREFERRED_VERSION_libgpiod = "2.2.2"`. meta-oe carries 1.6.5 and 2.2.2 side by
+side and their APIs are not compatible.
+
+`config.txt` fragment:
+
+```
+dtparam=i2c_arm=on
+dtoverlay=i2c-rtc,ds3231
+gpio=5,6,13,16,19,20,21,26=op,dh
+```
+
+The `gpio=` line holds the relay inputs de-asserted from the bootloader onward.
+Removing it opens every valve at power-up.
+
+Development loop: build the Qt6 SDK once with the existing `build-sdk.sh`,
+cross-compile `irrigationd` on the development host against the SDK sysroot,
+rsync the binary to the target, and restart the unit. Full image rebuilds are
+needed only when the layer or image contents change.
+
+## 10. Testing
+
+Test-driven, following the project convention.
+
+- `MockBackend` lets `ZoneController` tests assert exact line states for every
+  transition.
+- `Scheduler` takes an injected clock, so day rules, start times, DST
+  transitions, and grace-window behaviour are exercised across simulated months
+  without waiting.
+- `ProgramRunner` is tested against a fake `ZoneController`.
+
+The four safety invariants get dedicated tests: duration clamping, mutual
+exclusion on a second `openZone`, watchdog closure of a zone past its deadline,
+and `allOff()` aborting an active program.
+
+## 11. Deferred
+
+Weather-aware skip and runtime scaling; run history and reporting built on
+`fired_instants`; flow sensing and leak detection; master valve or pump-start
+output; read-only rootfs with a writable overlay; `sd_notify` watchdog
+integration with systemd.
