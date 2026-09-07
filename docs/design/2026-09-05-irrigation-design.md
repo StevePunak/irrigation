@@ -161,6 +161,38 @@ the layout before drilling.
 - Gland sizes against the actual cord and field bundle diameters.
 - Mounting plate material, and wifi signal strength with the lid closed.
 
+### 2.9 GPIO bring-up on the target
+
+The IO library's failure paths are unit tested, but nothing exercises
+`LibGpiodBackend`'s request, release, write or edge paths on a success path,
+because a development host has no accessible GPIO chip. These run once on the Pi
+before the daemon drives anything.
+
+1. Open by label — `pinctrl-rp1` on a Pi 5, `pinctrl-bcm2711` on a Pi 4B — and
+   request the STOP line as an input with `Gpio::Edge::Both`.
+2. **Press the STOP button and confirm `asserted()` fires on the press rather
+   than the release.** This is the one behaviour the in-memory backend certifies
+   independently of the kernel, so a green unit suite is not evidence for it.
+3. The self-destruct case: a slot that calls `InputPin::release()` on the first
+   event, with at least two edges in one read. Drive the input from a spare
+   output with a short square burst so more than one event is guaranteed in a
+   single wake. Repeat with `closeChip()` and with deleting the `InputPin`.
+   Pass means no crash and every emitted offset is the STOP line's.
+4. **Run step 3 under ASAN** (`-fsanitize=address`). A use-after-free that
+   happens to survive is indistinguishable from a fixed one without it. If only
+   one item on this list gets done, do this one.
+5. Re-entrancy: a slot that spins a nested `QEventLoop` on the first event while
+   more edges are pending. Each edge must be reported exactly once.
+6. Overflow the event buffer: bounce more than sixteen edges. Confirm the
+   notifier re-fires for the remainder and the settled logical state matches the
+   physical button.
+7. Cross-check the valve side: request all eight outputs, then assert no emitted
+   edge offset ever falls in the valve offset set. A fabricated offset landing on
+   a solenoid is the consequence the event-path fixes exist to prevent.
+8. Unbind the chip driver with a notifier armed. Confirm error text is set, and
+   record CPU usage — the error path returns without draining a level-triggered
+   descriptor, so a persistent read error spins.
+
 ## 3. Repositories and components
 
 | Path | Contents |
