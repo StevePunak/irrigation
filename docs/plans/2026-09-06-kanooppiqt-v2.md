@@ -1832,7 +1832,7 @@ int  gpiod_line_settings_set_output_value(struct gpiod_line_settings *, enum gpi
 int  gpiod_line_settings_set_bias(struct gpiod_line_settings *, enum gpiod_line_bias);
 int  gpiod_line_settings_set_edge_detection(struct gpiod_line_settings *, enum gpiod_line_edge);
 void gpiod_line_settings_set_active_low(struct gpiod_line_settings *, bool);
-int  gpiod_line_settings_set_debounce_period_us(struct gpiod_line_settings *, unsigned long);
+void gpiod_line_settings_set_debounce_period_us(struct gpiod_line_settings *, unsigned long);
 struct gpiod_line_config *gpiod_line_config_new(void);
 void gpiod_line_config_free(struct gpiod_line_config *config);
 int  gpiod_line_config_add_line_settings(struct gpiod_line_config *, const unsigned int *offsets,
@@ -1853,7 +1853,11 @@ enum gpiod_edge_event_type gpiod_edge_event_get_event_type(struct gpiod_edge_eve
 unsigned int gpiod_edge_event_get_line_offset(struct gpiod_edge_event *event);
 ```
 
-Note that `gpiod_line_settings_set_active_low` returns `void`, unlike its siblings. Assigning its result does not compile.
+`gpiod_line_settings_set_active_low` and `gpiod_line_settings_set_debounce_period_us` both return
+`void`, unlike the other setters. Assigning either result does not compile.
+
+`gpiod_edge_event_buffer_get_num_events` is also available and is the authoritative count of what
+a buffer currently holds.
 
 - [ ] **Step 1: Write the failing test `tests/tst_libgpiodbackend.cpp`**
 
