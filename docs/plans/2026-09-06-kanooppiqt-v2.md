@@ -14,7 +14,11 @@
 
 ## Global Constraints
 
-- `set(CMAKE_CXX_STANDARD 11)` — matches KanoopCommonQt, libEpcCommonQt and libEpcSimQt. Applications use 20; libraries do not.
+- `set(CMAKE_CXX_STANDARD 11)` — the line every Kanoop library carries. **The effective standard
+  is C++17 regardless.** `Qt6::Platform` exports `INTERFACE_COMPILE_FEATURES "cxx_std_17"`, and
+  `CMAKE_CXX_STANDARD` is a floor CMake raises to satisfy a linked target's compile features, never
+  a ceiling. Verified: the build emits `-std=gnu++17`. Do not add `CMAKE_CXX_STANDARD_REQUIRED ON`
+  to force 11 — Qt 6 headers need 17 and the build would stop. Write valid C++17.
 - `target_compile_options(${PROJ} PRIVATE -Wextra -Wall -Werror)` — warnings are errors.
 - Public headers live in `include/Kanoop/pi/`, sources in `src/`. Consumers include `<Kanoop/pi/outputbank.h>`.
 - **Global namespace.** Kanoop libraries do not namespace their types: the include path carries the scoping, the class name does not. `MutexEvent`, `AbstractThreadClass`, `OutputBank`. Enum values are scoped inside a holder class instead.
