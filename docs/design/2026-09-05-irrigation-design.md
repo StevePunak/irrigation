@@ -235,6 +235,24 @@ Five types, digital IO only:
 - **`InputPin`** — pull-up bias, edge detection, and kernel-side debounce via
   `gpiod_line_settings_set_debounce_period_us()`. The request file descriptor is
   wrapped in a `QSocketNotifier` so edges arrive as Qt signals on the event loop.
+
+**Polarity lives in the kernel, at every layer of this library.** libgpiod and
+the GPIO uAPI speak logical values throughout: `gpiod.h` documents
+`gpiod_line_value` as "Logical line state" and describes active-low as inverting
+the logical value relative to the physical pin. So `activeLow` is set once, on
+the line request, and every value and every edge that comes back is already
+logical.
+
+`OutputBank::setValue(offset, true)` therefore means "energise the load" and
+never inverts. `InputPin` emits `asserted()` on a logical rising edge and
+`deasserted()` on a logical falling edge, with no reference to `activeLow`.
+A 1NO button wired to ground reads physical LOW when pressed, which under
+`activeLow` is logical ACTIVE — a press is a rising edge.
+
+Applying the inversion a second time in software silently cancels the kernel's.
+On the valve side that opens every zone when asked to close it; on the STOP
+button it fires `asserted()` on release instead of press. This was built wrong
+once and caught by review, so state the convention rather than re-deriving it.
 - **`IGpioBackend`** with `LibGpiodBackend` and `MockBackend`. The mock allows
   the entire daemon to be unit tested on a development host with no GPIO
   hardware present.
