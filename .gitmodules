@@ -1,0 +1,6 @@
+[submodule "KanoopCommonQt"]
+	path = KanoopCommonQt
+	url = git@github.com:StevePunak/KanoopCommonQt.git
+[submodule "KanoopDatabaseQt"]
+	path = KanoopDatabaseQt
+	url = git@github.com:StevePunak/KanoopDatabaseQt.git
