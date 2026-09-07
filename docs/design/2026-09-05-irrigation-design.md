@@ -221,10 +221,13 @@ build, to be ported when a consuming project needs them.
 
 Five types, digital IO only:
 
-- **`GpioChip`** — RAII wrapper over `gpiod_chip`. Opens **by label**
-  (e.g. `pinctrl-bcm2711`) rather than by device index. The Pi 5 moves GPIO to
-  the RP1 southbridge and renumbers every chip on the system, so index-based
-  lookup silently targets different silicon across board revisions.
+- **Chip ownership lives in the backend**, not a separate `GpioChip` type.
+  `IGpioBackend::openChipByLabel()` opens **by label** (e.g. `pinctrl-bcm2711`)
+  rather than by device index. The Pi 5 moves GPIO to the RP1 southbridge and
+  renumbers every chip on the system, so index-based lookup silently targets
+  different silicon across board revisions. A standalone `GpioChip` was dropped
+  during implementation because it would have exposed `gpiod_chip` through the
+  seam the interface exists to close.
 - **`OutputBank`** — requests multiple lines in a single `gpiod_line_request`,
   so a multi-line transition is one atomic `set_values()` call.
 - **`OutputPin`** — single-line convenience over the same machinery, with
@@ -276,6 +279,16 @@ invariants regardless of caller:
 3. **Duration clamp.** Requested durations are clamped to a configured ceiling.
 4. **Watchdog.** A periodic tick independently verifies that no zone is open
    past its deadline and closes the bank if one is.
+
+   This requires a read-back the IO library does not yet expose.
+   `IGpioBackend` has `setValues()` and no `getValues()`, so
+   `OutputBank::isActive()` reports the last value written rather than the line
+   state. The daemon plan must add `getValues()` to the interface, plus
+   `OutputBank::readValues()` and `InputPin::isAsserted()`, or invariant 4
+   verifies the cache against itself. `InputPin` needs the level accessor for a
+   second reason: an edge-only input has no initial state, so a STOP button
+   already held down when the daemon restarts under `Restart=always` is
+   invisible.
 
 `allOff()` is callable from any component and always takes precedence.
 
