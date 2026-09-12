@@ -328,7 +328,7 @@ void TestInputPin::isAssertedReadsTheLine()
     QCOMPARE(pin.isAsserted(&ok), false);
     QCOMPARE(ok, true);
 
-    backend.setLineLevel(25, Gpio::Value::Active);
+    backend.setLineValue(25, Gpio::Value::Active);
     QCOMPARE(pin.isAsserted(&ok), true);
     QCOMPARE(ok, true);
 }
@@ -346,7 +346,23 @@ void TestInputPin::isAssertedReportsFailureWhenNotRequested()
 }
 ```
 
-`MockBackend::setLineLevel(quint32 offset, Gpio::Value value)` already exists for driving edge events in the current tests. If it does not, add it in this task with the same semantics: set the stored level for an offset on whichever request owns it.
+**MockBackend needs two new helpers, added in this task.** Verified against
+`include/Kanoop/pi/mockbackend.h` at `daf25a9`, the existing surface is
+`simulateEdge()`, `lineValue()`, `isRequested()`, `setValuesCallCount()`,
+`lastSetOffsets()`, `lastInputRequest()`, `lastOutputRequest()` and
+`setFailNextRequest()`. Missing, and required by Tasks 5, 7, 8 and 10:
+
+```cpp
+    /** @brief Sets the stored logical level of @p offset without emitting an edge. */
+    void setLineValue(quint32 offset, Gpio::Value value) { _values.insert(offset, value); }
+
+    /** @brief Resets the setValues() call counter. */
+    void resetSetValuesCallCount() { _setValuesCallCount = 0; }
+```
+
+`setLineValue()` sets the level an input reports on the next `getValues()`
+without emitting an edge — it is how a test simulates a button already held when
+the process starts.
 
 - [ ] **Step 12: Run it and verify it fails**
 
@@ -1874,7 +1890,7 @@ void TestZoneController::beginDrivesEveryLineInactive()
 
     QCOMPARE(controller.openZoneNumber(), 0);
     for(quint32 offset : eightZones().values()) {
-        QCOMPARE(backend.lineLevel(offset), Gpio::Value::Inactive);
+        QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
 }
 
@@ -1887,13 +1903,13 @@ void TestZoneController::openingAZoneClosesTheOpenOneAtomically()
     QVERIFY(controller.begin());
 
     QVERIFY(controller.openZone(3, 60));
-    QCOMPARE(backend.lineLevel(13), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(13), Gpio::Value::Active);
 
     backend.resetSetValuesCallCount();
     QVERIFY(controller.openZone(5, 60));
 
-    QCOMPARE(backend.lineLevel(13), Gpio::Value::Inactive);
-    QCOMPARE(backend.lineLevel(19), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(13), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(19), Gpio::Value::Active);
 
     // Both transitions in ONE write. Two writes means a window where both valves
     // are open, and on a 40 VA transformer that is a brownout.
@@ -1943,7 +1959,7 @@ void TestZoneController::zoneClosesWhenItsTimerExpires()
     QVERIFY(spy.wait(3000));
     QCOMPARE(spy.first().at(0).toInt(), 1);
     QCOMPARE(controller.openZoneNumber(), 0);
-    QCOMPARE(backend.lineLevel(5), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(5), Gpio::Value::Inactive);
 }
 
 void TestZoneController::watchdogClosesAZonePastItsDeadline()
@@ -1963,7 +1979,7 @@ void TestZoneController::watchdogClosesAZonePastItsDeadline()
 
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
     QVERIFY(spy.wait(5000));
-    QCOMPARE(backend.lineLevel(5), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(5), Gpio::Value::Inactive);
     QCOMPARE(controller.openZoneNumber(), 0);
 }
 
@@ -1980,7 +1996,7 @@ void TestZoneController::allOffClosesEverything()
 
     QCOMPARE(controller.openZoneNumber(), 0);
     for(quint32 offset : eightZones().values()) {
-        QCOMPARE(backend.lineLevel(offset), Gpio::Value::Inactive);
+        QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
 }
 
@@ -1998,9 +2014,8 @@ void TestZoneController::unknownZoneNumberIsRejected()
 }
 ```
 
-Three helpers are needed on `MockBackend`. Add them in this task if absent:
-`Gpio::Value lineLevel(quint32 offset) const`, `int setValuesCallCount() const`,
-`void resetSetValuesCallCount()`.
+`lineValue()`, `setValuesCallCount()` and `resetSetValuesCallCount()` all exist
+on `MockBackend` after Task 1. Do not re-add them.
 
 `disableCloseTimerForTest()` is a deliberate test seam on `ZoneController`. The
 watchdog exists precisely for the case where the close path failed, and there is
@@ -2886,7 +2901,7 @@ void TestProgramRunner::abortStopsTheSequenceAndClosesTheValve()
     QCOMPARE(runner.isRunning(), false);
     QCOMPARE(controller.openZoneNumber(), 0);
     for(quint32 offset : eightZones().values()) {
-        QCOMPARE(backend.lineLevel(offset), Gpio::Value::Inactive);
+        QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
 
     // allOff() emitted zoneClosed. Without the isRunning guard in onZoneClosed the
@@ -3092,7 +3107,7 @@ void TestStopButton::pressEmitsPressed()
     QVERIFY(button.begin());
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.emitEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(25, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 1);
 }
@@ -3106,7 +3121,7 @@ void TestStopButton::releaseDoesNotEmitPressed()
     QVERIFY(button.begin());
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.emitEdge(25, Gpio::Edge::Falling);
+    backend.simulateEdge(25, Gpio::Edge::Falling);
 
     QCOMPARE(spy.count(), 0);
 }
@@ -3115,7 +3130,7 @@ void TestStopButton::alreadyHeldAtStartupIsReported()
 {
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
-    backend.setPendingLineLevel(25, Gpio::Value::Active);
+    backend.setLineValue(25, Gpio::Value::Active);
 
     StopButton button(&backend, 25);
     QVERIFY(button.begin());
@@ -3142,9 +3157,8 @@ This exact assertion was wrong once already and a passing test pinned the wrong
 behaviour through six reviews. Inverting it in software cancels the kernel's
 inversion and fires the emergency stop when you let go of the button.
 
-`setPendingLineLevel()` sets a level the mock will report on the next
-`getValues()` without emitting an edge — it simulates a button already held when
-the process starts. Add it in this task if absent.
+`setLineValue()` and `simulateEdge()` both come from Task 1's additions to
+`MockBackend`. Do not re-add them.
 
 - [ ] **Step 2: Run it and verify it fails**
 
@@ -3620,14 +3634,14 @@ void TestDaemon::valvesAreClosedBeforeAnythingElseExists()
     // Leave every line energised, as the bootloader might on a board whose
     // config.txt gpio= line is missing.
     for(quint32 offset : eightZones().values()) {
-        backend.setPendingLineLevel(offset, Gpio::Value::Active);
+        backend.setLineValue(offset, Gpio::Value::Active);
     }
 
     IrrigationDaemon daemon(dir.filePath("irrigationd.ini"), &backend);
     QVERIFY2(daemon.start(), qPrintable(daemon.errorText()));
 
     for(quint32 offset : eightZones().values()) {
-        QCOMPARE(backend.lineLevel(offset), Gpio::Value::Inactive);
+        QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
 
     // The de-energising write must precede the first scheduler tick. The mock
@@ -3658,7 +3672,7 @@ void TestDaemon::stopRequestAbortsARunningProgram()
     QCOMPARE(daemon.runnerForTest()->isRunning(), false);
     QCOMPARE(daemon.controllerForTest()->openZoneNumber(), 0);
     for(quint32 offset : eightZones().values()) {
-        QCOMPARE(backend.lineLevel(offset), Gpio::Value::Inactive);
+        QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
 
     daemon.stop();
