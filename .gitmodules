@@ -4,3 +4,7 @@
 [submodule "KanoopDatabaseQt"]
 	path = KanoopDatabaseQt
 	url = git@github.com:StevePunak/KanoopDatabaseQt.git
+[submodule "KanoopPiQt"]
+	path = KanoopPiQt
+	url = git@github.com:StevePunak/KanoopPiQt.git
+	branch = feature/libgpiod-v2

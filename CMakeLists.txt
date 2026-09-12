@@ -25,9 +25,4 @@ file(WRITE "${CMAKE_SOURCE_DIR}/.clangd"
 
 add_subdirectory(KanoopCommonQt   EXCLUDE_FROM_ALL)
 add_subdirectory(KanoopDatabaseQt EXCLUDE_FROM_ALL)
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../KanoopPiQt/CMakeLists.txt")
-    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../KanoopPiQt" KanoopPiQt EXCLUDE_FROM_ALL)
-else()
-    message(FATAL_ERROR "KanoopPiQt not found. Expected it beside this repo at ${CMAKE_CURRENT_SOURCE_DIR}/../KanoopPiQt, checked out on branch feature/libgpiod-v2.")
-endif()
+add_subdirectory(KanoopPiQt       EXCLUDE_FROM_ALL)
