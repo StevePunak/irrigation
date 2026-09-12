@@ -26,3 +26,5 @@ file(WRITE "${CMAKE_SOURCE_DIR}/.clangd"
 add_subdirectory(KanoopCommonQt   EXCLUDE_FROM_ALL)
 add_subdirectory(KanoopDatabaseQt EXCLUDE_FROM_ALL)
 add_subdirectory(KanoopPiQt       EXCLUDE_FROM_ALL)
+
+add_subdirectory(IrrigationD)
