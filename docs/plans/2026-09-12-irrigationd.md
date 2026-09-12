@@ -700,13 +700,7 @@ Expected: failure — `irrigationsettings.h` does not exist.
 #include <QSettings>
 #include <QString>
 
-/**
- * @brief INI-backed daemon configuration.
- *
- * The zone-to-GPIO map lives here rather than in the database because it
- * describes the wiring of one particular box; changing it must not require a
- * schema migration.
- */
+/** @brief INI-backed daemon configuration. */
 class IrrigationSettings
 {
 public:
