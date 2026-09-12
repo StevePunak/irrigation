@@ -8,9 +8,8 @@
 /**
  * @brief INI-backed daemon configuration.
  *
- * The zone-to-GPIO map lives here rather than in the database because it
- * describes the wiring of one particular box; changing it must not require a
- * schema migration.
+ * Malformed entries in the zone map are dropped; the surviving zones keep
+ * their own numbers.
  */
 class IrrigationSettings
 {
@@ -43,7 +42,7 @@ public:
     QString databasePath() const;
 
 private:
-    mutable QSettings _settings;
+    QSettings _settings;
 };
 
 #endif // IRRIGATIONSETTINGS_H

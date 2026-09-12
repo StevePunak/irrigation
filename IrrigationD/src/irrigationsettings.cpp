@@ -20,7 +20,7 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
         bool zoneOk = false;
         bool offsetOk = false;
         int zone = parts.at(0).trimmed().toInt(&zoneOk);
-        uint offset = parts.at(1).trimmed().toUInt(&offsetOk);
+        quint32 offset = parts.at(1).trimmed().toUInt(&offsetOk);
         if(zoneOk == false || offsetOk == false) {
             continue;
         }
