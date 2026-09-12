@@ -14,6 +14,8 @@ qt_add_executable(${PROJ}
     src/main.cpp
     src/irrigationsettings.h  src/irrigationsettings.cpp
     src/irrigationdaemon.h    src/irrigationdaemon.cpp
+    src/database/irrigationdatasource.h  src/database/irrigationdatasource.cpp
+    src/database/irrigation.qrc
 )
 
 target_compile_definitions(${PROJ} PRIVATE

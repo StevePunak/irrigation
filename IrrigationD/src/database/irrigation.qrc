@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/database">
+        <file>schema.sql</file>
+        <file>migrate/irrigation/1.0.0/01-initial.sql</file>
+    </qresource>
+</RCC>

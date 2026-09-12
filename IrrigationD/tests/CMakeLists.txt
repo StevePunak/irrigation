@@ -8,10 +8,17 @@ function(irrigation_add_test name)
         KanoopCommonQt KanoopDatabaseQt KanoopPiQt
     )
     target_compile_options(${name} PRIVATE -Wextra -Wall -Werror)
+    target_compile_definitions(${name} PRIVATE IRRIGATION_DB_VERSION=${IRRIGATION_DB_VERSION})
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
 irrigation_add_test(tst_settings
     tst_settings.cpp
     ../src/irrigationsettings.cpp
+)
+
+irrigation_add_test(tst_irrigationdatasource
+    tst_datasource.cpp
+    ../src/database/irrigationdatasource.cpp
+    ../src/database/irrigation.qrc
 )
