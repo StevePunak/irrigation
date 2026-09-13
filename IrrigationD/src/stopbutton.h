@@ -10,9 +10,7 @@
  * @brief Reports every press of the physical emergency-stop button.
  *
  * @warning This is the daemon's physical kill switch. begin() reads the
- *          line's starting state so a daemon restarted while the button is
- *          already held knows it immediately, without waiting for an edge
- *          that already happened.
+ *          line's starting state.
  */
 class StopButton : public QObject
 {
@@ -29,7 +27,7 @@ public:
     /** @brief Requests the line and reads its starting state. @return True on success. */
     bool begin();
 
-    /** @brief Returns whether the button was held as of the last known state. */
+    /** @brief Returns whether the button is currently held, tracked from the line's edges. */
     bool isHeld() const { return _held; }
 
     /** @brief Returns the text of the most recent failure. */
@@ -38,6 +36,10 @@ public:
 signals:
     /** @brief Emitted for every press of the button. */
     void pressed();
+
+private slots:
+    void onAsserted();
+    void onDeasserted();
 
 private:
     IGpioBackend* _backend;

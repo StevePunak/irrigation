@@ -9,6 +9,11 @@ StopButton::StopButton(IGpioBackend* backend, quint32 offset, QObject* parent) :
 
 bool StopButton::begin()
 {
+    if(_pin != nullptr) {
+        _errorText = QString("begin() has already been called");
+        return false;
+    }
+
     _pin = new InputPin(_backend, "irrigationd-stop", _offset, this);
     // Button is 1NO to ground: PullUp and activeLow together are what make a press assert.
     _pin->setActiveLow(true);
@@ -21,7 +26,8 @@ bool StopButton::begin()
         return false;
     }
 
-    connect(_pin, &InputPin::asserted, this, &StopButton::pressed);
+    connect(_pin, &InputPin::asserted, this, &StopButton::onAsserted);
+    connect(_pin, &InputPin::deasserted, this, &StopButton::onDeasserted);
 
     bool ok = false;
     _held = _pin->isAsserted(&ok);
@@ -31,6 +37,17 @@ bool StopButton::begin()
     }
 
     return true;
+}
+
+void StopButton::onAsserted()
+{
+    _held = true;
+    emit pressed();
+}
+
+void StopButton::onDeasserted()
+{
+    _held = false;
 }
 
 #include "moc_stopbutton.cpp"
