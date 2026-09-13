@@ -154,7 +154,7 @@ Everything below `web/`.
 | Path | Responsibility |
 |---|---|
 | `package.json` | Scripts and dependencies. `TZ=UTC` lives in the test scripts. |
-| `tsconfig.json`, `tsconfig.node.json` | Strict compiler settings for app code and for the Vite config. |
+| `tsconfig.json` | Strict compiler settings. One project covering `src`, `scripts` and the two config files, so the type gate reaches all of them. |
 | `vite.config.ts` | Build and dev-server config. Dev proxy `/api` → `127.0.0.1:8080/admin`. |
 | `vitest.config.ts` | jsdom environment, setup file, colocated test glob. |
 | `index.html` | Single page. Viewport meta. No external origins. |
@@ -190,7 +190,7 @@ Everything below `web/`.
 The Vite project, the strict compiler settings, the test harness, and the one piece of production logic the dev server depends on: the `/api` → `/admin` path rewrite. Getting that rewrite wrong produces `/admin/admin/status` or `/status`, both of which 404 against a daemon that is running correctly.
 
 **Files:**
-- Create: `web/package.json`, `web/tsconfig.json`, `web/tsconfig.node.json`, `web/vite.config.ts`, `web/vitest.config.ts`, `web/index.html`, `web/.gitignore`
+- Create: `web/package.json`, `web/tsconfig.json`, `web/vite.config.ts`, `web/vitest.config.ts`, `web/index.html`, `web/.gitignore`
 - Create: `web/src/main.tsx`, `web/src/App.tsx`
 - Create: `web/src/styles/tokens.css`, `web/src/styles/app.css`
 - Create: `web/src/api/apiPath.ts`
@@ -262,37 +262,27 @@ The Vite project, the strict compiler settings, the test harness, and the one pi
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
+    "allowJs": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]
 }
 ```
 
-`web/tsconfig.node.json`:
+**One project, no `references`.** `tsc --noEmit` uses a referenced project only for its
+declarations and never type-checks that project's own sources, so a two-project split leaves
+`vite.config.ts` outside the gate: `rewrite: 12345` where the type is `(path: string) => string`
+compiles clean and exits 0. Measured. The `include` list above is what puts the config files and
+`scripts/` under the same `tsc --noEmit` the source is under.
 
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2023"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "composite": true
-  },
-  "include": ["vite.config.ts", "vitest.config.ts", "scripts"]
-}
-```
+`allowJs` is what lets `src/build/checkBundle.test.ts` import `scripts/checkBundle.mjs` in Task 10.
+Without it that import fails with `TS7016: Could not find a declaration file`.
 
-This file carries `composite` without `noEmit`. TypeScript 5.9 rejects the pair with
-`error TS6310: Referenced project '...tsconfig.node.json' may not disable emit`, because the root
-`tsconfig.json` lists it under `references`. Nothing in this project runs `tsc --build`, so no emit
-happens; `npm run typecheck` is `tsc --noEmit` against the root project.
+There is no `tsconfig.node.json`. A second project would have to be `composite` to be referenced,
+`composite` may not set `noEmit` (`TS6310`), and a non-`noEmit` project emits `vite.config.js` beside
+its source on any direct `tsc -p` or `tsc -b` invocation — into a directory `.gitignore` does not
+cover.
 
 `web/index.html`:
 
@@ -5249,7 +5239,6 @@ The recipe hard-fails the image build when `web/dist/` is missing or holds no `i
 **Files:**
 - Create: `web/scripts/checkBundle.mjs`
 - Create: `web/README.md`
-- Modify: `web/tsconfig.node.json`
 - Test: `web/src/build/checkBundle.test.ts`
 
 **Interfaces:**
@@ -5257,13 +5246,12 @@ The recipe hard-fails the image build when `web/dist/` is missing or holds no `i
   - `scanForExternalOrigins(text: string): string[]`
   - `checkBundleDir(dir: string): string[]` — returns the list of problems; empty means the bundle is fit to install
 
-- [ ] **Step 1: Drop `scripts` from the node tsconfig**
+- [ ] **Step 1: Confirm the compiler already covers `scripts/`**
 
-`checkBundle.mjs` is plain ESM with no types. `tsc` with `allowJs` off reports a file in `include` that it will not check, so the include list becomes:
-
-```json
-"include": ["vite.config.ts", "vitest.config.ts"]
-```
+Task 1's `tsconfig.json` carries `"allowJs": true` and lists `scripts` in `include`, which is what
+lets the test below import `checkBundle.mjs`. No change is needed here. Confirm both are present
+before writing the test; without them the import fails with `TS7016: Could not find a declaration
+file for module '../../scripts/checkBundle.mjs'`.
 
 - [ ] **Step 2: Write the failing bundle-guard tests**
 
