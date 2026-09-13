@@ -171,6 +171,7 @@ Everything below `web/`.
 | `src/hooks/useCountdown.ts` | Local per-second decrement between polls. |
 | `src/programs/dayRule.ts` | `dowMask` ↔ weekday list, day-rule summary text, total runtime. |
 | `src/settings/settingsMap.ts` | Parse and serialise the string-valued settings map. |
+| `src/screens/screenProps.ts` | The `ScreenProps` contract the three screens share. |
 | `src/screens/NowScreen.tsx` | Running zone, next run, eight zone tiles, stop control. |
 | `src/screens/ProgramsScreen.tsx` | Program list with computed totals and next run. |
 | `src/screens/ProgramEditor.tsx` | Create, edit, delete one program. |
@@ -2396,6 +2397,7 @@ nginx serves the bundle with `try_files $uri $uri/ /index.html`, so path routing
 **Files:**
 - Modify: `web/src/App.tsx`
 - Modify: `web/src/App.test.tsx`
+- Create: `web/src/screens/screenProps.ts`
 - Create: `web/src/screens/NowScreen.tsx`, `web/src/screens/ProgramsScreen.tsx`, `web/src/screens/SettingsScreen.tsx` (stubs; Tasks 6-9 fill them)
 - Modify: `web/src/styles/app.css`
 
@@ -2404,7 +2406,7 @@ nginx serves the bundle with `try_files $uri $uri/ /index.html`, so path routing
 - Produces:
   - `type ScreenName = 'now' | 'programs' | 'settings'`
   - `function screenFromHash(hash: string): ScreenName`
-  - Each screen takes `{ status: Status | null; refresh: () => void }`
+  - `ScreenProps` in `src/screens/screenProps.ts` — `{ status: Status | null; polls: number; refresh: () => void }`, imported by all three screens
 
 - [ ] **Step 1: Write the failing shell tests**
 
@@ -2495,6 +2497,15 @@ describe('App', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/not reaching the controller/i)
   })
 
+  it('does not claim a last known state when the first poll ever fails', async () => {
+    vi.spyOn(client, 'getStatus').mockRejectedValue(new Error('Failed to fetch'))
+    render(<App />)
+
+    const banner = await screen.findByRole('status')
+    expect(banner).toHaveTextContent(/not reaching the controller/i)
+    expect(banner).not.toHaveTextContent(/last known state/i)
+  })
+
   it('hides the banner once the poll recovers', async () => {
     vi.spyOn(client, 'getStatus')
       .mockRejectedValueOnce(new Error('Failed to fetch'))
@@ -2527,9 +2538,9 @@ Expected: failure — `screenFromHash` is not exported and there are no tabs.
 
 - [ ] **Step 3: Write the screen stubs**
 
-Each is replaced by its own task. `web/src/screens/NowScreen.tsx`:
+`ScreenProps` lives in its own module, `web/src/screens/screenProps.ts`:
 
-```tsx
+```ts
 import type { Status } from '../api/types'
 
 export interface ScreenProps {
@@ -2538,6 +2549,15 @@ export interface ScreenProps {
   polls: number
   refresh: () => void
 }
+```
+
+Tasks 6, 7 and 9 each replace one of the three screen files wholesale. A shared contract declared
+inside one of those files would break the other two screens' imports on the first replacement.
+
+Each stub is replaced by its own task. `web/src/screens/NowScreen.tsx`:
+
+```tsx
+import type { ScreenProps } from './screenProps'
 
 export default function NowScreen(_props: ScreenProps) {
   return (
@@ -2548,7 +2568,7 @@ export default function NowScreen(_props: ScreenProps) {
 }
 ```
 
-`web/src/screens/ProgramsScreen.tsx` and `web/src/screens/SettingsScreen.tsx` are the same shape with headings `Programs` and `Settings`, each importing `ScreenProps` from `./NowScreen`.
+`web/src/screens/ProgramsScreen.tsx` and `web/src/screens/SettingsScreen.tsx` are the same shape with headings `Programs` and `Settings`, each importing `ScreenProps` from `./screenProps`.
 
 - [ ] **Step 4: Write the shell**
 
@@ -2601,7 +2621,9 @@ export default function App() {
     <div className="app">
       {stale ? (
         <div className="banner" role="status">
-          Not reaching the controller — showing the last known state. {error}
+          {status === null
+            ? `Not reaching the controller. ${error ?? ''}`
+            : `Not reaching the controller — showing the last known state. ${error ?? ''}`}
         </div>
       ) : null}
 
@@ -2631,6 +2653,11 @@ export default function App() {
 `navigate` sets the state as well as the hash. Assigning `window.location.hash` fires `hashchange` asynchronously in a real browser, and jsdom's timing differs; setting both makes the click test deterministic and the listener idempotent.
 
 The banner is keyed on `stale` rather than on `error` being non-null, so a one-off failure that the next poll clears does not leave a warning on screen.
+
+`stale` goes true on the **first** poll failure, when `status` is still `null`. The unbranched
+message would tell an operator watching a cold boot against a dead daemon that the page is showing a
+last known state it has never received. The test asserts the phrase `last known state` is **absent**
+in that state, so a reword that reintroduces the claim fails.
 
 - [ ] **Step 5: Run the suite and the type check**
 
