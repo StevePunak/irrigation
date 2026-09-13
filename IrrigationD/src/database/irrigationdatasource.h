@@ -88,7 +88,7 @@ public:
     /** @brief Sets the value stored for @p key, inserting or replacing it. @return True on success. */
     bool setSettingValue(const QString& key, const QString& value);
 
-    /** @brief Public passthrough to executeQuery(), so tests can assert on row counts directly. */
+    /** @brief Public passthrough to executeQuery(). */
     QSqlQuery rawQuery(const QString& sql, bool* ok);
 
 protected:

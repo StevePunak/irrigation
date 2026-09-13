@@ -16,8 +16,7 @@ FiredInstant::Outcome FiredInstant::outcomeFromString(const QString& value)
 
 QString FiredInstant::outcomeToString(Outcome value)
 {
-    switch(value)
-    {
+    switch(value) {
     case Outcome::Ran:          return "ran";
     case Outcome::SkippedBusy:  return "skipped_busy";
     case Outcome::SkippedRain:  return "skipped_rain";

@@ -51,6 +51,17 @@ void TestRepository::recordFiringIsIdempotent()
     QVERIFY(ok);
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 1);
+
+    QSqlQuery row = source.rawQuery(
+        QString("SELECT program_id, start_time_id, scheduled_at_utc, outcome FROM fired_instants WHERE program_id = %1")
+            .arg(instant.programId),
+        &ok);
+    QVERIFY(ok);
+    QVERIFY(row.next());
+    QCOMPARE(row.value(0).toInt(), instant.programId);
+    QCOMPARE(row.value(1).toInt(), instant.startTimeId);
+    QCOMPARE(row.value(2).toString(), instant.scheduledAtUtc.toUTC().toString(Qt::ISODate));
+    QCOMPARE(row.value(3).toString(), QString("ran"));
 }
 
 void TestRepository::insertProgramAssignsTheId()
@@ -160,13 +171,21 @@ void TestRepository::programZonesRoundTripInSequenceOrder()
 
     ProgramZoneList zones = source.zonesFor(program.id);
     QCOMPARE(zones.count(), 3);
+    QCOMPARE(zones.at(0).id, first.id);
+    QCOMPARE(zones.at(0).programId, program.id);
     QCOMPARE(zones.at(0).zoneId, 1);
+    QCOMPARE(zones.at(0).sequence, 0);
     QCOMPARE(zones.at(0).durationSeconds, 600);
+    QCOMPARE(zones.at(1).id, second.id);
+    QCOMPARE(zones.at(1).programId, program.id);
     QCOMPARE(zones.at(1).zoneId, 2);
+    QCOMPARE(zones.at(1).sequence, 1);
     QCOMPARE(zones.at(1).durationSeconds, 450);
-    QCOMPARE(zones.at(2).zoneId, 3);
-    QCOMPARE(zones.at(2).durationSeconds, 300);
     QCOMPARE(zones.at(2).id, third.id);
+    QCOMPARE(zones.at(2).programId, program.id);
+    QCOMPARE(zones.at(2).zoneId, 3);
+    QCOMPARE(zones.at(2).sequence, 2);
+    QCOMPARE(zones.at(2).durationSeconds, 300);
 }
 
 void TestRepository::startTimeRoundTripsAllFields()
@@ -210,6 +229,7 @@ void TestRepository::updateZoneChangesNameAndEnabled()
     QVERIFY(source.updateZone(zone));
 
     ZoneList updated = source.allZones();
+    QCOMPARE(updated.first().number, 1);
     QCOMPARE(updated.first().name, QString("Front lawn"));
     QCOMPARE(updated.first().enabled, false);
     // The untouched zones must survive the update unchanged.
@@ -232,7 +252,7 @@ void TestRepository::updateProgramChangesFields()
     program.name = "Renamed";
     program.enabled = false;
     program.dayMode = Program::DayMode::Odd;
-    program.dowMask = 0;
+    program.dowMask = 0x2A;
     program.intervalDays = 5;
     program.anchorDate = QDate(2026, 5, 1);
     QVERIFY(source.updateProgram(program));
@@ -242,6 +262,7 @@ void TestRepository::updateProgramChangesFields()
     QCOMPARE(all.first().name, QString("Renamed"));
     QCOMPARE(all.first().enabled, false);
     QCOMPARE(all.first().dayMode, Program::DayMode::Odd);
+    QCOMPARE(all.first().dowMask, 0x2A);
     QCOMPARE(all.first().intervalDays, 5);
     QCOMPARE(all.first().anchorDate, QDate(2026, 5, 1));
 }
