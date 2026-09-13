@@ -1839,7 +1839,7 @@ The only component that touches GPIO, and the one that decides whether your yard
   - `ZoneController(IGpioBackend* backend, const QMap<int,quint32>& zoneGpioMap, bool activeLow, int maxZoneSeconds, QObject* parent = nullptr)`
   - `bool begin()` — requests the bank and drives everything inactive
   - `bool openZone(int zoneNumber, int seconds)`
-  - `void allOff()`
+  - `bool allOff()` — true when every line was driven inactive
   - `int openZoneNumber() const` — zero when none
   - `int secondsRemaining() const`
   - `void setWatchdogInterval(const TimeSpan& value)`
@@ -2081,7 +2081,7 @@ public:
     bool openZone(int zoneNumber, int seconds);
 
     /** @brief Closes every zone. Callable from any component; always takes precedence. */
-    void allOff();
+    bool allOff();
 
     /** @brief Returns the open zone number, or zero when none is open. */
     int openZoneNumber() const { return _openZone; }
