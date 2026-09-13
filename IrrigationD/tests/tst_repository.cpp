@@ -35,7 +35,8 @@ void TestRepository::recordFiringIsIdempotent()
 
     FiredInstant instant;
     instant.programId = program.id;
-    instant.startTimeId = 1;
+    // Deliberately distinct from programId: equal values would let a swapped programId/startTimeId bind pass unnoticed.
+    instant.startTimeId = 42;
     instant.scheduledAtUtc = QDateTime(QDate(2026, 9, 12), QTime(13, 0), QTimeZone::UTC);
     instant.outcome = FiredInstant::Outcome::Ran;
 
@@ -120,20 +121,21 @@ void TestRepository::prunePreservesRecentRows()
 
     FiredInstant old;
     old.programId = program.id;
-    old.startTimeId = 1;
+    // Deliberately distinct from programId: equal values would let a swapped programId/startTimeId bind pass unnoticed.
+    old.startTimeId = 41;
     old.scheduledAtUtc = QDateTime(QDate(2026, 1, 1), QTime(6, 0), QTimeZone::UTC);
     old.outcome = FiredInstant::Outcome::Ran;
     QVERIFY(source.recordFiring(old));
 
     FiredInstant recent = old;
-    recent.startTimeId = 2;
+    recent.startTimeId = 42;
     recent.scheduledAtUtc = QDateTime(QDate(2026, 9, 1), QTime(6, 0), QTimeZone::UTC);
     QVERIFY(source.recordFiring(recent));
 
     QVERIFY(source.pruneFiredInstantsOlderThan(QDateTime(QDate(2026, 6, 1), QTime(0, 0), QTimeZone::UTC)));
 
-    QVERIFY(source.hasFired(program.id, 1, old.scheduledAtUtc) == false);
-    QVERIFY(source.hasFired(program.id, 2, recent.scheduledAtUtc));
+    QVERIFY(source.hasFired(program.id, old.startTimeId, old.scheduledAtUtc) == false);
+    QVERIFY(source.hasFired(program.id, recent.startTimeId, recent.scheduledAtUtc));
 }
 
 void TestRepository::programZonesRoundTripInSequenceOrder()
@@ -147,25 +149,27 @@ void TestRepository::programZonesRoundTripInSequenceOrder()
     QVERIFY(source.insertProgram(program));
 
     // Insert out of sequence order; zonesFor() must still come back ordered by sequence.
+    // zoneId/sequence are kept clear of programId (1 in a fresh database) and of each
+    // other, so a transposed bind between any two of these int columns is observable.
     ProgramZone third;
     third.programId = program.id;
-    third.zoneId = 3;
-    third.sequence = 2;
+    third.zoneId = 6;
+    third.sequence = 12;
     third.durationSeconds = 300;
     QVERIFY(source.insertProgramZone(third));
     QVERIFY(third.id > 0);
 
     ProgramZone first;
     first.programId = program.id;
-    first.zoneId = 1;
-    first.sequence = 0;
+    first.zoneId = 4;
+    first.sequence = 10;
     first.durationSeconds = 600;
     QVERIFY(source.insertProgramZone(first));
 
     ProgramZone second;
     second.programId = program.id;
-    second.zoneId = 2;
-    second.sequence = 1;
+    second.zoneId = 5;
+    second.sequence = 11;
     second.durationSeconds = 450;
     QVERIFY(source.insertProgramZone(second));
 
@@ -173,18 +177,18 @@ void TestRepository::programZonesRoundTripInSequenceOrder()
     QCOMPARE(zones.count(), 3);
     QCOMPARE(zones.at(0).id, first.id);
     QCOMPARE(zones.at(0).programId, program.id);
-    QCOMPARE(zones.at(0).zoneId, 1);
-    QCOMPARE(zones.at(0).sequence, 0);
+    QCOMPARE(zones.at(0).zoneId, 4);
+    QCOMPARE(zones.at(0).sequence, 10);
     QCOMPARE(zones.at(0).durationSeconds, 600);
     QCOMPARE(zones.at(1).id, second.id);
     QCOMPARE(zones.at(1).programId, program.id);
-    QCOMPARE(zones.at(1).zoneId, 2);
-    QCOMPARE(zones.at(1).sequence, 1);
+    QCOMPARE(zones.at(1).zoneId, 5);
+    QCOMPARE(zones.at(1).sequence, 11);
     QCOMPARE(zones.at(1).durationSeconds, 450);
     QCOMPARE(zones.at(2).id, third.id);
     QCOMPARE(zones.at(2).programId, program.id);
-    QCOMPARE(zones.at(2).zoneId, 3);
-    QCOMPARE(zones.at(2).sequence, 2);
+    QCOMPARE(zones.at(2).zoneId, 6);
+    QCOMPARE(zones.at(2).sequence, 12);
     QCOMPARE(zones.at(2).durationSeconds, 300);
 }
 
