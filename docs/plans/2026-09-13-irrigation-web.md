@@ -2701,7 +2701,7 @@ The stop control is an emergency stop. It takes one tap and runs. No confirmatio
 `web/src/screens/NowScreen.test.tsx`:
 
 ```tsx
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import NowScreen from './NowScreen'
@@ -2838,6 +2838,143 @@ describe('NowScreen while running', () => {
     expect(await screen.findByTestId('zone-tile-3')).toHaveAttribute('data-running', 'true')
     expect(screen.getByTestId('zone-tile-1')).toHaveAttribute('data-running', 'false')
   })
+
+  it('resets the countdown on a new poll that repeats the remaining seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { rerender } = render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+      expect(await screen.findByTestId('running-banner')).toHaveTextContent('2:00')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+      })
+      expect(screen.getByTestId('running-banner')).toHaveTextContent('1:57')
+
+      rerender(<NowScreen status={runningStatus} polls={2} refresh={refresh} />)
+      expect(screen.getByTestId('running-banner')).toHaveTextContent('2:00')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('NowScreen with no status', () => {
+  it('does not claim the system is idle when no status has arrived', async () => {
+    render(<NowScreen status={null} polls={0} refresh={refresh} />)
+
+    const banner = await screen.findByTestId('running-banner')
+    expect(banner).toHaveTextContent(/unknown/i)
+    expect(banner).not.toHaveTextContent(/no zone running/i)
+    expect(screen.getByTestId('next-run')).not.toHaveTextContent(/none scheduled/i)
+  })
+})
+
+describe('NowScreen concurrent actions', () => {
+  it('does not let a late run failure overwrite a completed stop', async () => {
+    const user = userEvent.setup()
+    const pending: { reject?: (reason: Error) => void } = {}
+    vi.spyOn(client, 'runZone').mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          pending.reject = reject
+        }),
+    )
+    vi.spyOn(client, 'stopAll').mockResolvedValue(undefined)
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    await user.click(
+      within(await screen.findByTestId('zone-tile-1')).getByRole('button', { name: /run/i }),
+    )
+    await user.click(screen.getByRole('button', { name: /stop/i }))
+
+    await waitFor(() => {
+      expect(client.stopAll).toHaveBeenCalled()
+    })
+
+    await act(async () => {
+      pending.reject?.(new Error('zone run failed'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('re-enables the zone tiles when a superseded action settles', async () => {
+    const user = userEvent.setup()
+    const pending: { reject?: (reason: Error) => void } = {}
+    vi.spyOn(client, 'runZone').mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          pending.reject = reject
+        }),
+    )
+    // The stop never settles, standing in for a dropped connection.
+    vi.spyOn(client, 'stopAll').mockImplementation(() => new Promise<void>(() => {}))
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(tile).getByRole('button', { name: /run/i }))
+    await user.click(screen.getByRole('button', { name: /stop/i }))
+
+    await act(async () => {
+      pending.reject?.(new Error('zone run failed'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // One request is still outstanding, so the tiles stay disabled.
+    expect(within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i })).toBeDisabled()
+  })
+
+  it('re-enables the zone tiles once every request has settled', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'runZone').mockRejectedValue(new Error('zone run failed'))
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(tile).getByRole('button', { name: /run/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/zone run failed/i)
+    })
+    expect(within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i })).toBeEnabled()
+  })
+
+  it('keeps the tiles disabled while an earlier run still hangs', async () => {
+    const user = userEvent.setup()
+    let resolveStop: (() => void) | null = null
+    // The run never settles, standing in for a dropped connection.
+    vi.spyOn(client, 'runZone').mockImplementation(() => new Promise<void>(() => {}))
+    vi.spyOn(client, 'stopAll').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = () => {
+            resolve()
+          }
+        }),
+    )
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(tile).getByRole('button', { name: /run/i }))
+    await user.click(screen.getByRole('button', { name: /stop/i }))
+
+    await act(async () => {
+      resolveStop?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(
+      within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i }),
+    ).toBeDisabled()
+  })
 })
 
 describe('StopButton', () => {
@@ -2960,7 +3097,7 @@ export default function StopButton({ onStop, busy }: StopButtonProps) {
 `web/src/screens/NowScreen.tsx`:
 
 ```tsx
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getZones, runZone, stopAll } from '../api/client'
 import type { Zone } from '../api/types'
 import StopButton from '../components/StopButton'
@@ -2977,6 +3114,8 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
   const [seconds, setSeconds] = useState(DEFAULT_QUICK_RUN)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const actionSeq = useRef(0)
+  const inFlight = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -3002,6 +3141,8 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
   const onRun = useCallback(
     (zone: Zone) => {
+      const seq = (actionSeq.current += 1)
+      inFlight.current += 1
       setError(null)
       setBusy(true)
       runZone(zone, seconds)
@@ -3009,16 +3150,21 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
           refresh()
         })
         .catch((caught: unknown) => {
-          setError(caught instanceof Error ? caught.message : String(caught))
+          if (actionSeq.current === seq) {
+            setError(caught instanceof Error ? caught.message : String(caught))
+          }
         })
         .finally(() => {
-          setBusy(false)
+          inFlight.current -= 1
+          setBusy(inFlight.current > 0)
         })
     },
     [seconds, refresh],
   )
 
   const onStop = useCallback(() => {
+    const seq = (actionSeq.current += 1)
+    inFlight.current += 1
     setError(null)
     setBusy(true)
     stopAll()
@@ -3026,14 +3172,17 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
         refresh()
       })
       .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught))
+        if (actionSeq.current === seq) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        }
       })
       .finally(() => {
-        setBusy(false)
+        inFlight.current -= 1
+        setBusy(inFlight.current > 0)
       })
   }, [refresh])
 
-  const zone = status?.timezone ?? ''
+  const zoneId = status?.timezone ?? ''
 
   return (
     <section className="screen">
@@ -3046,7 +3195,9 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
       )}
 
       <div className="running" data-testid="running-banner">
-        {runningZone > 0 ? (
+        {status === null ? (
+          <span className="running__unknown">Zone state unknown</span>
+        ) : runningZone > 0 ? (
           <>
             <span className="running__zone">
               Zone {runningZone} — {running?.name ?? ''}
@@ -3062,9 +3213,11 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
       <div className="next-run" data-testid="next-run">
         Next run:{' '}
-        {status !== null && status.nextRunUtc !== null
-          ? formatDayAndClock(status.nextRunUtc, zone)
-          : 'none scheduled'}
+        {status === null
+          ? 'unknown'
+          : status.nextRunUtc !== null
+            ? formatDayAndClock(status.nextRunUtc, zoneId)
+            : 'none scheduled'}
       </div>
 
       <label className="quick-run">
@@ -3099,7 +3252,22 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 }
 ```
 
-`useCountdown` takes the poll counter as its epoch, so every successful poll resets the local count to the daemon's number and the ticks in between fill the gap. Passing `secondsRemaining` as its own epoch would look equivalent and would stop resetting whenever two consecutive polls happened to report the same value.
+`useCountdown` takes the poll counter as its epoch. Passing `secondsRemaining` as its own epoch
+compiles, looks equivalent, and stops resetting whenever two consecutive polls report the same
+value. Measured: that swap passes every single-render test in this file, so the suite carries a
+re-render case specifically to separate them.
+
+**The screen never asserts a state it has not been told.** `status` is `null` on a cold boot and
+after a failed poll. Falling back to `runningZone = 0` renders "No zone running" and "none
+scheduled" — confident claims made while nothing is known, sitting directly beneath the shell's own
+banner saying the controller is unreachable. A zone can be open in the field while that text says
+otherwise. The tests assert the ABSENCE of those two strings, so a reworded claim still fails.
+
+**Two mechanisms, two concerns.** `actionSeq` decides which action may write `error`, so a late
+`runZone` rejection cannot overwrite a completed stop. `inFlight` counts outstanding requests and
+`busy` derives from the count. Folding them together — guarding the `.finally` behind the sequence
+too — makes the most-recently-launched action the only one that can clear `busy`, which re-enables
+every tile while an earlier request is still hanging. Measured both directions.
 
 `StopButton` receives `busy` for its `aria-busy` attribute and never for `disabled`.
 
@@ -3126,6 +3294,11 @@ Append to `web/src/styles/app.css`:
   font-size: 2rem;
   font-weight: 700;
   color: var(--running);
+}
+
+.running__unknown {
+  color: var(--warn);
+  font-weight: 600;
 }
 
 .stop {
