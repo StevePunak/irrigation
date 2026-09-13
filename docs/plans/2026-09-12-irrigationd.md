@@ -16,6 +16,13 @@
 
 These apply to every task. A task's requirements implicitly include this section.
 
+> **Amended 2026-09-13 — tests come at the end.** Tasks 1-5 were executed
+> TDD-style and keep their tests. From Task 6 onward the "Write the failing
+> test" and "Run it to verify it fails" steps are superseded: implementation
+> tasks deliver code only, and the unit tests for Tasks 6-10 are written in one
+> pass after that code has settled. Build and wiring assertions that prove an
+> artifact is real still belong to the task that makes the claim.
+
 - **Repository:** all work happens in `~/src/punak/irrigation` on a branch off `feature/superproject`, except Task 1 which is in `~/src/punak/KanoopPiQt` on `feature/libgpiod-v2`.
 - **Never `git push`.** Commits stay local. The user controls all remote pushes.
 - `set(CMAKE_CXX_STANDARD 11)` — the line every Kanoop library carries. **The effective standard is C++17 regardless.** `Qt6::Platform` exports `INTERFACE_COMPILE_FEATURES "cxx_std_17"`, and `CMAKE_CXX_STANDARD` is a floor CMake raises to satisfy a linked target's compile features, never a ceiling. Verified: the build emits `-std=gnu++17`. Do not add `CMAKE_CXX_STANDARD_REQUIRED ON`. Write valid C++17.
