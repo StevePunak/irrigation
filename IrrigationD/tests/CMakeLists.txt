@@ -21,4 +21,20 @@ irrigation_add_test(tst_irrigationdatasource
     tst_datasource.cpp
     ../src/database/irrigationdatasource.cpp
     ../src/database/irrigation.qrc
+    ../src/model/zone.cpp
+    ../src/model/program.cpp
+    ../src/model/programstarttime.cpp
+    ../src/model/programzone.cpp
+    ../src/model/firedinstant.cpp
+)
+
+irrigation_add_test(tst_repository
+    tst_repository.cpp
+    ../src/database/irrigationdatasource.cpp
+    ../src/database/irrigation.qrc
+    ../src/model/zone.cpp
+    ../src/model/program.cpp
+    ../src/model/programstarttime.cpp
+    ../src/model/programzone.cpp
+    ../src/model/firedinstant.cpp
 )
