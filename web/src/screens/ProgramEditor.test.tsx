@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProgramEditor, { emptyDraft, validationError } from './ProgramEditor'
 import * as client from '../api/client'
+import { ApiError } from '../api/types'
 import { morningProgram, zoneFixtures } from '../test/fixtures'
 
 const onDone = vi.fn()
@@ -37,11 +38,16 @@ afterEach(() => {
 })
 
 describe('emptyDraft', () => {
-  it('defaults a new program to the controller timezone', () => {
-    const draft = emptyDraft(LA)
-    expect(draft.startTimes).toEqual([{ minutesAfterMidnight: 360, timezone: LA }])
-    expect(draft.dayMode).toBe('DaysOfWeek')
-    expect(draft.enabled).toBe(true)
+  it('defaults the start time to the controller timezone', () => {
+    expect(emptyDraft(LA).startTimes).toEqual([{ minutesAfterMidnight: 360, timezone: LA }])
+  })
+
+  it('defaults the day mode to DaysOfWeek', () => {
+    expect(emptyDraft(LA).dayMode).toBe('DaysOfWeek')
+  })
+
+  it('defaults enabled to true', () => {
+    expect(emptyDraft(LA).enabled).toBe(true)
   })
 })
 
@@ -169,6 +175,21 @@ describe('creating a program', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/name/i)
     expect(createProgram).not.toHaveBeenCalled()
   })
+
+  it('surfaces a rejected save and does not close the editor', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'createProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
+
+    renderEditor(null)
+    await user.type(screen.getByLabelText(/program name/i), 'Evening')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onCancel).not.toHaveBeenCalled()
+  })
 })
 
 describe('editing a program', () => {
@@ -207,7 +228,7 @@ describe('editing a program', () => {
     ])
   })
 
-  it('renumbers sequences when a zone moves up', async () => {
+  it('save renumbers zone sequence from the final array order after a move', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
 
@@ -224,7 +245,7 @@ describe('editing a program', () => {
     ])
   })
 
-  it('renumbers sequences when a zone is removed from the middle', async () => {
+  it('save renumbers zone sequence from the final array order after removing a middle zone', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
 
@@ -258,6 +279,20 @@ describe('editing a program', () => {
     expect(draft.startTimes).toHaveLength(2)
     expect(draft.startTimes[1]!.timezone).toBe(LA)
   })
+
+  it('shows the surviving start time after removing an earlier one', async () => {
+    const user = userEvent.setup()
+    renderEditor(morningProgram)
+
+    await user.click(screen.getByRole('button', { name: /add start time/i }))
+    const second = screen.getByLabelText(/start time 2/i)
+    await user.clear(second)
+    await user.type(second, '19:00')
+
+    await user.click(screen.getByRole('button', { name: /remove start time 1/i }))
+
+    expect(screen.getByLabelText(/start time 1/i)).toHaveValue('19:00')
+  })
 })
 
 describe('deleting a program', () => {
@@ -290,5 +325,17 @@ describe('deleting a program', () => {
   it('offers no delete for a program that does not exist yet', () => {
     renderEditor(null)
     expect(screen.queryByRole('button', { name: /delete/i })).toBeNull()
+  })
+
+  it('surfaces a rejected delete and does not close the editor', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'deleteProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
+
+    renderEditor(morningProgram)
+    await user.click(screen.getByRole('button', { name: /delete/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onCancel).not.toHaveBeenCalled()
   })
 })

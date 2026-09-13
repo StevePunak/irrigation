@@ -51,7 +51,7 @@ export function validationError(draft: ProgramDraft): string | null {
   return null
 }
 
-/** Rewrites `sequence` from array position so a reorder reaches the daemon. */
+/** Sets each zone's `sequence` to its array position, 1-based. */
 function resequence(zones: ProgramDraft['zones']): ProgramDraft['zones'] {
   return zones.map((zone, index) => ({ ...zone, sequence: index + 1 }))
 }
@@ -73,6 +73,11 @@ export default function ProgramEditor({
 }: ProgramEditorProps) {
   const [draft, setDraft] = useState<ProgramDraft>(() =>
     program === null ? emptyDraft(controllerZone) : toDraft(program),
+  )
+  const [startTimeText, setStartTimeText] = useState<string[]>(() =>
+    (program === null ? emptyDraft(controllerZone) : toDraft(program)).startTimes.map((start) =>
+      minutesToInputValue(start.minutesAfterMidnight),
+    ),
   )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -128,7 +133,7 @@ export default function ProgramEditor({
       const reordered = [...current.zones]
       const [moved] = reordered.splice(index, 1)
       reordered.splice(target, 0, moved!)
-      return { ...current, zones: resequence(reordered) }
+      return { ...current, zones: reordered }
     })
   }, [])
 
@@ -230,9 +235,11 @@ export default function ProgramEditor({
             {`Start time ${index + 1}`}
             <input
               type="time"
-              defaultValue={minutesToInputValue(start.minutesAfterMidnight)}
+              value={startTimeText[index] ?? minutesToInputValue(start.minutesAfterMidnight)}
               onChange={(event) => {
-                const minutes = inputValueToMinutes(event.target.value)
+                const text = event.target.value
+                setStartTimeText((current) => current.map((entry, i) => (i === index ? text : entry)))
+                const minutes = inputValueToMinutes(text)
                 if (minutes < 0) {
                   return
                 }
@@ -248,6 +255,7 @@ export default function ProgramEditor({
           <button
             type="button"
             onClick={() => {
+              setStartTimeText((current) => current.filter((_, i) => i !== index))
               patch({ startTimes: draft.startTimes.filter((_, i) => i !== index) })
             }}
           >
@@ -258,6 +266,7 @@ export default function ProgramEditor({
       <button
         type="button"
         onClick={() => {
+          setStartTimeText((current) => [...current, minutesToInputValue(360)])
           patch({
             startTimes: [...draft.startTimes, { minutesAfterMidnight: 360, timezone: controllerZone }],
           })
@@ -322,7 +331,7 @@ export default function ProgramEditor({
           <button
             type="button"
             onClick={() => {
-              patch({ zones: resequence(draft.zones.filter((_, i) => i !== index)) })
+              patch({ zones: draft.zones.filter((_, i) => i !== index) })
             }}
           >
             {`Remove zone ${index + 1}`}
@@ -337,10 +346,7 @@ export default function ProgramEditor({
             return
           }
           patch({
-            zones: resequence([
-              ...draft.zones,
-              { zoneId: first.id, sequence: draft.zones.length + 1, durationSeconds: 600 },
-            ]),
+            zones: [...draft.zones, { zoneId: first.id, sequence: draft.zones.length + 1, durationSeconds: 600 }],
           })
         }}
       >
