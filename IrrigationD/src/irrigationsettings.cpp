@@ -24,7 +24,6 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
     // QSettings returns a QStringList for an unquoted comma-separated value.
     QString raw = value.typeId() == QMetaType::QStringList ? value.toStringList().join(',') : value.toString();
     const QStringList pairs = raw.split(',', Qt::SkipEmptyParts);
-    int parsedCount = 0;
     for(const QString& pair : pairs) {
         QStringList parts = pair.split('=');
         if(parts.count() != 2) {
@@ -42,11 +41,10 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
         }
 
         result.insert(zone, offset);
-        ++parsedCount;
     }
 
-    if(parsedCount != pairs.count()) {
-        Log::logText(LVL_WARNING, QString("Parsed %1 of %2 zone entries").arg(parsedCount).arg(pairs.count()));
+    if(result.count() != pairs.count()) {
+        Log::logText(LVL_WARNING, QString("Parsed %1 of %2 zone entries").arg(result.count()).arg(pairs.count()));
     }
 
     return result;
