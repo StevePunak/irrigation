@@ -241,6 +241,37 @@ describe('NowScreen concurrent actions', () => {
     })
     expect(within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i })).toBeEnabled()
   })
+
+  it('keeps the tiles disabled while an earlier run still hangs', async () => {
+    const user = userEvent.setup()
+    let resolveStop: (() => void) | null = null
+    // The run never settles, standing in for a dropped connection.
+    vi.spyOn(client, 'runZone').mockImplementation(() => new Promise<void>(() => {}))
+    vi.spyOn(client, 'stopAll').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = () => {
+            resolve()
+          }
+        }),
+    )
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(tile).getByRole('button', { name: /run/i }))
+    await user.click(screen.getByRole('button', { name: /stop/i }))
+
+    await act(async () => {
+      resolveStop?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(
+      within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i }),
+    ).toBeDisabled()
+  })
 })
 
 describe('StopButton', () => {
