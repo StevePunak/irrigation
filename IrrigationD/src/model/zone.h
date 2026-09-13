@@ -4,20 +4,17 @@
 #include <QList>
 #include <QString>
 
-/** @brief One physical valve zone on the manifold. */
+/**
+ * @brief One physical valve zone on the manifold.
+ *
+ * number is the manifold position, 1 through 8.
+ */
 class Zone
 {
 public:
-    /** @brief Primary key. Zero when not yet persisted. */
     int id = 0;
-
-    /** @brief Manifold position, 1 through 8. */
     int number = 0;
-
-    /** @brief Display name. */
     QString name;
-
-    /** @brief Whether this zone may be scheduled or run manually. */
     bool enabled = true;
 
     /** @brief Returns true when this zone came from the database. */
