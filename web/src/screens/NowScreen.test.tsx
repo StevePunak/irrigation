@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import NowScreen from './NowScreen'
@@ -134,6 +134,62 @@ describe('NowScreen while running', () => {
     render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
     expect(await screen.findByTestId('zone-tile-3')).toHaveAttribute('data-running', 'true')
     expect(screen.getByTestId('zone-tile-1')).toHaveAttribute('data-running', 'false')
+  })
+
+  it('resets the countdown on a new poll that repeats the remaining seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { rerender } = render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+      expect(await screen.findByTestId('running-banner')).toHaveTextContent('2:00')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+      })
+      expect(screen.getByTestId('running-banner')).toHaveTextContent('1:57')
+
+      rerender(<NowScreen status={runningStatus} polls={2} refresh={refresh} />)
+      expect(screen.getByTestId('running-banner')).toHaveTextContent('2:00')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('NowScreen with no status', () => {
+  it('does not claim the system is idle when no status has arrived', async () => {
+    render(<NowScreen status={null} polls={0} refresh={refresh} />)
+
+    const banner = await screen.findByTestId('running-banner')
+    expect(banner).toHaveTextContent(/unknown/i)
+    expect(banner).not.toHaveTextContent(/no zone running/i)
+    expect(screen.getByTestId('next-run')).not.toHaveTextContent(/none scheduled/i)
+  })
+})
+
+describe('NowScreen concurrent actions', () => {
+  it('does not let a late run failure overwrite a completed stop', async () => {
+    const user = userEvent.setup()
+    const pending: { reject?: (reason: Error) => void } = {}
+    vi.spyOn(client, 'runZone').mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          pending.reject = reject
+        }),
+    )
+    vi.spyOn(client, 'stopAll').mockResolvedValue(undefined)
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    await user.click(
+      within(await screen.findByTestId('zone-tile-1')).getByRole('button', { name: /run/i }),
+    )
+    await user.click(screen.getByRole('button', { name: /stop/i }))
+
+    pending.reject?.(new Error('zone run failed'))
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
   })
 })
 

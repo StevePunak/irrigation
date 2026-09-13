@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getZones, runZone, stopAll } from '../api/client'
 import type { Zone } from '../api/types'
 import StopButton from '../components/StopButton'
@@ -15,6 +15,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
   const [seconds, setSeconds] = useState(DEFAULT_QUICK_RUN)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const actionSeq = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -40,6 +41,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
   const onRun = useCallback(
     (zone: Zone) => {
+      const seq = (actionSeq.current += 1)
       setError(null)
       setBusy(true)
       runZone(zone, seconds)
@@ -47,16 +49,21 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
           refresh()
         })
         .catch((caught: unknown) => {
-          setError(caught instanceof Error ? caught.message : String(caught))
+          if (actionSeq.current === seq) {
+            setError(caught instanceof Error ? caught.message : String(caught))
+          }
         })
         .finally(() => {
-          setBusy(false)
+          if (actionSeq.current === seq) {
+            setBusy(false)
+          }
         })
     },
     [seconds, refresh],
   )
 
   const onStop = useCallback(() => {
+    const seq = (actionSeq.current += 1)
     setError(null)
     setBusy(true)
     stopAll()
@@ -64,14 +71,18 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
         refresh()
       })
       .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught))
+        if (actionSeq.current === seq) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        }
       })
       .finally(() => {
-        setBusy(false)
+        if (actionSeq.current === seq) {
+          setBusy(false)
+        }
       })
   }, [refresh])
 
-  const zone = status?.timezone ?? ''
+  const zoneId = status?.timezone ?? ''
 
   return (
     <section className="screen">
@@ -84,7 +95,9 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
       )}
 
       <div className="running" data-testid="running-banner">
-        {runningZone > 0 ? (
+        {status === null ? (
+          <span className="running__unknown">Zone state unknown</span>
+        ) : runningZone > 0 ? (
           <>
             <span className="running__zone">
               Zone {runningZone} — {running?.name ?? ''}
@@ -100,9 +113,11 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
       <div className="next-run" data-testid="next-run">
         Next run:{' '}
-        {status !== null && status.nextRunUtc !== null
-          ? formatDayAndClock(status.nextRunUtc, zone)
-          : 'none scheduled'}
+        {status === null
+          ? 'unknown'
+          : status.nextRunUtc !== null
+            ? formatDayAndClock(status.nextRunUtc, zoneId)
+            : 'none scheduled'}
       </div>
 
       <label className="quick-run">

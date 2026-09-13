@@ -83,6 +83,10 @@ button, input, select {
   color: var(--running);
 }
 
+.running__unknown {
+  color: var(--warn);
+}
+
 .stop {
   min-height: 96px;
   border: 0;
