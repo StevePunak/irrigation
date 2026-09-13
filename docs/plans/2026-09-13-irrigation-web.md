@@ -3601,7 +3601,12 @@ function formatAnchor(anchorDate: string | null): string {
   if (match === null) {
     return 'an unset date'
   }
-  return `${Number(match[3])} ${MONTH_LABELS[Number(match[2]) - 1]} ${match[1]}`
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return 'an unset date'
+  }
+  return `${day} ${MONTH_LABELS[month - 1]} ${match[1]}`
 }
 
 export function dayRuleSummary(
@@ -3669,7 +3674,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProgramsScreen from './ProgramsScreen'
 import * as client from '../api/client'
-import type { Program } from '../api/types'
+import { ApiError, type Program } from '../api/types'
 import { idleStatus, morningProgram, zoneFixtures } from '../test/fixtures'
 
 const refresh = vi.fn()
@@ -3743,7 +3748,9 @@ describe('ProgramsScreen', () => {
   it('renders next run in the controller zone, and a placeholder when absent', async () => {
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
 
-    expect(await within(screen.getByTestId('program-1')).findByTestId('next-run')).toHaveTextContent('6:00 AM')
+    expect(await within(await screen.findByTestId('program-1')).findByTestId('next-run')).toHaveTextContent(
+      '6:00 AM',
+    )
     expect(within(screen.getByTestId('program-2')).getByTestId('next-run')).toHaveTextContent('—')
   })
 
@@ -3782,9 +3789,10 @@ describe('ProgramsScreen', () => {
     })
   })
 
-  it('reloads the list after a toggle so a rejected write cannot look applied', async () => {
+  it('reloads the list after a failed toggle so a rejected write cannot look applied', async () => {
     const user = userEvent.setup()
     const getPrograms = vi.spyOn(client, 'getPrograms').mockResolvedValue([morningProgram, eveningProgram])
+    vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
 
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
     await screen.findByTestId('program-1')
@@ -3797,10 +3805,46 @@ describe('ProgramsScreen', () => {
     })
   })
 
+  it('keeps a failed toggle visible after the reload clears the error state', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'getPrograms').mockResolvedValue([morningProgram, eveningProgram])
+    vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
+
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('switch'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+  })
+
+  it('reports the failed toggle when the reload fails too', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'getPrograms')
+      .mockResolvedValueOnce([morningProgram])
+      .mockRejectedValue(new ApiError(503, 'reload failed'))
+    vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'toggle failed'))
+
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('switch'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/toggle failed/i)
+    expect(alert).not.toHaveTextContent(/reload failed/i)
+  })
+
   it('says so when there are no programs', async () => {
     vi.spyOn(client, 'getPrograms').mockResolvedValue([])
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
     expect(await screen.findByText(/no programs yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('ProgramsScreen with no status', () => {
+  it('marks times it cannot place rather than guessing a zone', async () => {
+    render(<ProgramsScreen status={null} polls={0} refresh={refresh} />)
+
+    const morning = await screen.findByTestId('program-1')
+    expect(within(morning).getByTestId('next-run')).toHaveTextContent('--')
+    expect(within(morning).getByTestId('start-times')).toHaveTextContent('America/Los_Angeles')
   })
 })
 ```
@@ -3850,12 +3894,16 @@ export default function ProgramsScreen({ status }: ScreenProps) {
 
   const onToggle = useCallback(
     async (program: Program) => {
+      let toggleError: string | null = null
       try {
         await updateProgram(program.id, { ...toDraft(program), enabled: program.enabled === false })
       } catch (caught: unknown) {
-        setError(caught instanceof Error ? caught.message : String(caught))
+        toggleError = caught instanceof Error ? caught.message : String(caught)
       }
       await load()
+      if (toggleError !== null) {
+        setError(toggleError)
+      }
     },
     [load],
   )
