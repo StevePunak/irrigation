@@ -7,7 +7,7 @@
 
 static QMap<int, quint32> eightZones()
 {
-    return { {1,5}, {2,6}, {3,13}, {4,16}, {5,19}, {6,20}, {7,21}, {8,26} };
+    return { {1,5}, {2,6}, {3,12}, {4,13}, {5,16}, {6,19}, {7,20}, {8,21} };
 }
 
 class TestZoneController : public QObject
@@ -54,13 +54,13 @@ void TestZoneController::openingAZoneClosesTheOpenOneAtomically()
     QVERIFY(controller.begin());
 
     QVERIFY(controller.openZone(3, 60));
-    QCOMPARE(backend.lineValue(13), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Active);
 
     backend.resetSetValuesCallCount();
     QVERIFY(controller.openZone(5, 60));
 
-    QCOMPARE(backend.lineValue(13), Gpio::Value::Inactive);
-    QCOMPARE(backend.lineValue(19), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(16), Gpio::Value::Active);
 
     // Both transitions in ONE write. Two writes means a window where both valves
     // are open, and on a 40 VA transformer that is a brownout.
@@ -112,7 +112,7 @@ void TestZoneController::zoneClosesWhenItsTimerExpires()
     QVERIFY(closedSpy.wait(4000));
     QCOMPARE(closedSpy.first().at(0).toInt(), 6);
     QCOMPARE(controller.openZoneNumber(), 0);
-    QCOMPARE(backend.lineValue(20), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(19), Gpio::Value::Inactive);
     QCOMPARE(watchdogSpy.count(), 0);
 }
 
@@ -131,7 +131,7 @@ void TestZoneController::watchdogClosesAZonePastItsDeadline()
 
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
     QVERIFY(spy.wait(5000));
-    QCOMPARE(backend.lineValue(13), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
     QCOMPARE(controller.openZoneNumber(), 0);
 }
 
@@ -146,8 +146,8 @@ void TestZoneController::watchdogTripsOnWrongLineEnergised()
 
     QVERIFY(controller.openZone(7, 600));
 
-    backend.setLineValue(21, Gpio::Value::Inactive);
-    backend.setLineValue(16, Gpio::Value::Active);
+    backend.setLineValue(20, Gpio::Value::Inactive);
+    backend.setLineValue(13, Gpio::Value::Active);
 
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
     QVERIFY(spy.wait(5000));
@@ -165,7 +165,7 @@ void TestZoneController::watchdogDoesNotReportSuccessWhenCloseFails()
 
     QVERIFY(controller.openZone(8, 600));
 
-    backend.setLineValue(13, Gpio::Value::Active);
+    backend.setLineValue(12, Gpio::Value::Active);
     backend.setFailNextSetValues(true);
 
     QSignalSpy trippedSpy(&controller, &ZoneController::watchdogTripped);
@@ -173,8 +173,8 @@ void TestZoneController::watchdogDoesNotReportSuccessWhenCloseFails()
 
     QCOMPARE(trippedSpy.count(), 0);
     QCOMPARE(controller.openZoneNumber(), 8);
-    QCOMPARE(backend.lineValue(13), Gpio::Value::Active);
-    QCOMPARE(backend.lineValue(26), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(21), Gpio::Value::Active);
 }
 
 void TestZoneController::allOffClosesEverything()

@@ -52,7 +52,7 @@ Each of these produces a clean build and fails later, so they are called out bef
 
 2. **`SRC_URI` uses `gitsm://`, never `git://`.** The Kanoop libraries are consumed as submodules through `add_subdirectory`. A plain git fetch produces a source tree that configures successfully and then fails to link.
 
-3. **The `gpio=` line in `config.txt` holds the relay inputs de-asserted from the bootloader onward.** Removing it opens every valve at power-up. Measured on the target: six of the eight zone lines come up asserted, because BCM 0-8 default to pull-up.
+3. **The `gpio=` line in `config.txt` holds the relay inputs de-asserted from the bootloader onward.** Removing it opens every valve at power-up. Measured on the target: six of the eight zone lines come up asserted, because BCM 9-27 default to pull-down.
 
 ---
 
@@ -181,7 +181,7 @@ local_conf_header:
     # The gpio= line drives the relay inputs high — the inactive level for a
     # LOW-trigger board — from the bootloader onward. Six of the eight zone
     # lines come up asserted without it, because BCM 0-8 default to pull-up.
-    RPI_EXTRA_CONFIG = 'dtparam=i2c_arm=on\ndtoverlay=i2c-rtc,ds3231\ngpio=5,6,13,16,19,20,21,26=op,dh'
+    RPI_EXTRA_CONFIG = 'dtparam=i2c_arm=on\ndtoverlay=i2c-rtc,ds3231\ngpio=5,6,12,13,16,19,20,21=op,dh'
 
     # Shared caches
     DL_DIR ?= "${TOPDIR}/../downloads"
@@ -289,7 +289,7 @@ The daemon's configuration keys are fixed by `IrrigationD/src/irrigationsettings
 [gpio]
 ; zone=BCM offset. Zone numbers are what the API and the schedule address a
 ; valve by; the offsets are the wiring of this particular box.
-zones=1=5,2=6,3=13,4=16,5=19,6=20,7=21,8=26
+zones=1=5,2=6,3=12,4=13,5=16,6=19,7=20,8=21
 chipLabel=pinctrl-bcm2711
 ; The relay board is LOW-trigger. The kernel performs the inversion once,
 ; on the line request; the daemon speaks logical values everywhere else.
@@ -416,7 +416,7 @@ c = configparser.ConfigParser()
 c.read('/home/spunak/src/punak/rpi/meta-rpi4-irrigation/recipes-core/irrigation-init/files/irrigationd.ini')
 zones = dict(p.split('=') for p in c['gpio']['zones'].split(','))
 assert sorted(zones) == [str(n) for n in range(1, 9)], zones
-assert sorted(int(v) for v in zones.values()) == [5, 6, 13, 16, 19, 20, 21, 26], zones
+assert sorted(int(v) for v in zones.values()) == [5, 6, 12, 13, 16, 19, 20, 21], zones
 assert len(set(zones.values())) == 8, "two zones share a GPIO offset"
 assert c['server']['listenPort'] == '8080'
 assert c['database']['path'] == '/var/lib/irrigationd/irrigation.db'
@@ -863,7 +863,7 @@ cd ~/src/punak/rpi
 D=build/tmp/deploy/images/raspberrypi4-64
 
 echo "--- 1. the GPIO safety line reached config.txt"
-grep -n 'gpio=5,6,13,16,19,20,21,26=op,dh' $D/bootfiles/config.txt
+grep -n 'gpio=5,6,12,13,16,19,20,21=op,dh' $D/bootfiles/config.txt
 
 echo "--- 2. the SQLite driver plugin is in the image manifest"
 grep -E 'qtbase-plugins|^sqlite3 ' $D/rpi4-irrigation-image-raspberrypi4-64.rootfs.manifest
@@ -957,7 +957,7 @@ systemctl unmask irrigationd
 systemctl start irrigationd
 systemctl status irrigationd
 journalctl -u irrigationd -n 50 --no-pager
-gpioinfo | grep -E 'line +(5|6|13|16|19|20|21|26):'
+gpioinfo | grep -E 'line +(5|6|12|13|16|19|20|21):'
 ```
 
 Expected: the unit active, no errors in the journal, and every one of the eight lines showing as used by `irrigationd` and output. Meter the contacts again — still all eight open.

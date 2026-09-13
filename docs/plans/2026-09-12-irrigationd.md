@@ -23,6 +23,11 @@ These apply to every task. A task's requirements implicitly include this section
 > pass after that code has settled. Build and wiring assertions that prove an
 > artifact is real still belong to the task that makes the claim.
 
+> **Amended 2026-09-13 — zone GPIO remap.** Zones 1-8 are now BCM
+> `5, 6, 12, 13, 16, 19, 20, 21`. BCM 26 is gone: the proto-HAT does not break
+> it out. Where an already-executed task's text shows the old map, the map
+> above wins.
+
 - **Repository:** all work happens in `~/src/punak/irrigation` on a branch off `feature/superproject`, except Task 1 which is in `~/src/punak/KanoopPiQt` on `feature/libgpiod-v2`.
 - **Never `git push`.** Commits stay local. The user controls all remote pushes.
 - `set(CMAKE_CXX_STANDARD 11)` — the line every Kanoop library carries. **The effective standard is C++17 regardless.** `Qt6::Platform` exports `INTERFACE_COMPILE_FEATURES "cxx_std_17"`, and `CMAKE_CXX_STANDARD` is a floor CMake raises to satisfy a linked target's compile features, never a ceiling. Verified: the build emits `-std=gnu++17`. Do not add `CMAKE_CXX_STANDARD_REQUIRED ON`. Write valid C++17.
@@ -559,7 +564,7 @@ void TestSettings::zoneMapParsesEightEntries()
     QString path = dir.filePath("test.ini");
     {
         QSettings ini(path, QSettings::IniFormat);
-        ini.setValue("gpio/zones", "1=5,2=6,3=13,4=16,5=19,6=20,7=21,8=26");
+        ini.setValue("gpio/zones", "1=5,2=6,3=12,4=13,5=16,6=19,7=20,8=21");
     }
 
     IrrigationSettings settings(path);
@@ -567,9 +572,9 @@ void TestSettings::zoneMapParsesEightEntries()
 
     QCOMPARE(map.count(), 8);
     QCOMPARE(map.value(1), 5u);
-    QCOMPARE(map.value(4), 16u);
-    QCOMPARE(map.value(5), 19u);
-    QCOMPARE(map.value(8), 26u);
+    QCOMPARE(map.value(4), 13u);
+    QCOMPARE(map.value(5), 16u);
+    QCOMPARE(map.value(8), 21u);
 }
 
 void TestSettings::zoneMapRejectsMalformedEntries()
@@ -1864,7 +1869,7 @@ The only component that touches GPIO, and the one that decides whether your yard
 
 static QMap<int, quint32> eightZones()
 {
-    return { {1,5}, {2,6}, {3,13}, {4,16}, {5,19}, {6,20}, {7,21}, {8,26} };
+    return { {1,5}, {2,6}, {3,12}, {4,13}, {5,16}, {6,19}, {7,20}, {8,21} };
 }
 
 class TestZoneController : public QObject
@@ -1904,13 +1909,13 @@ void TestZoneController::openingAZoneClosesTheOpenOneAtomically()
     QVERIFY(controller.begin());
 
     QVERIFY(controller.openZone(3, 60));
-    QCOMPARE(backend.lineValue(13), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Active);
 
     backend.resetSetValuesCallCount();
     QVERIFY(controller.openZone(5, 60));
 
-    QCOMPARE(backend.lineValue(13), Gpio::Value::Inactive);
-    QCOMPARE(backend.lineValue(19), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(16), Gpio::Value::Active);
 
     // Both transitions in ONE write. Two writes means a window where both valves
     // are open, and on a 40 VA transformer that is a brownout.
@@ -2739,7 +2744,7 @@ Walks one program's ordered zone list. Timing authority stays with `ZoneControll
 
 static QMap<int, quint32> eightZones()
 {
-    return { {1,5}, {2,6}, {3,13}, {4,16}, {5,19}, {6,20}, {7,21}, {8,26} };
+    return { {1,5}, {2,6}, {3,12}, {4,13}, {5,16}, {6,19}, {7,20}, {8,21} };
 }
 
 class TestProgramRunner : public QObject

@@ -96,20 +96,28 @@ valve later requires either reducing to seven zones or a second relay board.
 
 | Function | BCM line |
 |---|---|
-| Zones 1-8 | 5, 6, 13, 16, 19, 20, 21, 26 |
+| Zones 1-8 | 5, 6, 12, 13, 16, 19, 20, 21 |
 | Stop button | 25 |
 | RTC I2C | 2 (SDA), 3 (SCL) |
 
 Zone lines are chosen to avoid boot-time alternate functions and to leave the
 I2C and UART console pins free.
 
+The eight are also the rightmost eight pads on the proto-HAT breakout strip,
+in silkscreen order, so zone N lands on pad N and the ribbon to the relay
+board runs straight with no crossings.
+
+BCM 26 carried zone 8 until 2026-09-13. The GeeekPi proto-HAT does not break
+it out: the strip labels 25 signals and 26 is not among them.
+
 ### 2.6 Boot-time valve safety
 
 The relay board is **low-level trigger with no polarity jumper**: pulling an IN
 pin low energises its relay and closes NO. Raspberry Pi GPIO lines come up as
 inputs, and lines 9-27 default to an internal pull-down, which the board reads
-as asserted. Without mitigation, every zone opens at power-up and stays open
-until the daemon starts.
+as asserted. Without mitigation, six of the eight zones open at power-up
+and stay open until the daemon starts. BCM 5 and 6 default to pull-up and
+come up de-asserted.
 
 Two independent mitigations, both required:
 
@@ -117,7 +125,7 @@ Two independent mitigations, both required:
    dominate the Pi's ~50k internal pulls and hold the inputs de-asserted during
    the window before the bootloader runs, and whenever the daemon is not holding
    the lines.
-2. **`gpio=5,6,13,16,19,20,21,26=op,dh` in `config.txt`**, applied by the
+2. **`gpio=5,6,12,13,16,19,20,21=op,dh` in `config.txt`**, applied by the
    bootloader before userspace exists.
 
 The SunFounder datasheet contradicts itself on trigger polarity: its feature
@@ -572,7 +580,7 @@ fails at runtime with a clean build and no warning.
 ```
 dtparam=i2c_arm=on
 dtoverlay=i2c-rtc,ds3231
-gpio=5,6,13,16,19,20,21,26=op,dh
+gpio=5,6,12,13,16,19,20,21=op,dh
 ```
 
 The `gpio=` line holds the relay inputs de-asserted from the bootloader onward.

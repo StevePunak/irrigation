@@ -19,7 +19,7 @@ void TestSettings::zoneMapParsesEightEntries()
     QString path = dir.filePath("test.ini");
     {
         QSettings ini(path, QSettings::IniFormat);
-        ini.setValue("gpio/zones", "1=5,2=6,3=13,4=16,5=19,6=20,7=21,8=26");
+        ini.setValue("gpio/zones", "1=5,2=6,3=12,4=13,5=16,6=19,7=20,8=21");
     }
 
     IrrigationSettings settings(path);
@@ -27,9 +27,9 @@ void TestSettings::zoneMapParsesEightEntries()
 
     QCOMPARE(map.count(), 8);
     QCOMPARE(map.value(1), 5u);
-    QCOMPARE(map.value(4), 16u);
-    QCOMPARE(map.value(5), 19u);
-    QCOMPARE(map.value(8), 26u);
+    QCOMPARE(map.value(4), 13u);
+    QCOMPARE(map.value(5), 16u);
+    QCOMPARE(map.value(8), 21u);
 }
 
 void TestSettings::zoneMapRejectsMalformedEntries()
