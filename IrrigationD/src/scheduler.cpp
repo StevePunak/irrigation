@@ -6,6 +6,7 @@
 
 Scheduler::Scheduler(IrrigationDataSource* source, IClock* clock, QObject* parent) :
     QObject(parent),
+    LoggingBaseClass("scheduler"),
     _source(source),
     _clock(clock)
 {
@@ -55,6 +56,10 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime, const QDate
         *valid = false;
     }
 
+    if(startTime.minutesAfterMidnight < 0 || startTime.minutesAfterMidnight >= 24 * 60) {
+        return QDateTime();
+    }
+
     QTimeZone zone(startTime.timezone.toUtf8());
     if(zone.isValid() == false) {
         return QDateTime();
@@ -68,8 +73,7 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime, const QDate
     }
 
     // PreferBefore alone still returns a valid instant inside a spring-forward gap by
-    // sliding to an adjacent time; the Reject construction above is what detects the gap.
-    // When the local time occurs twice (fall back), PreferBefore selects the earlier one.
+    // sliding to an adjacent time.
     QDateTime resolved(localDate, localTime, zone, QDateTime::TransitionResolution::PreferBefore);
     if(resolved.isValid() == false) {
         return QDateTime();
@@ -79,6 +83,21 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime, const QDate
         *valid = true;
     }
     return resolved.toUTC();
+}
+
+QDateTime Scheduler::missedInstantFor(const ProgramStartTime& startTime, const QDate& localDate)
+{
+    const QTime localTime = QTime(0, 0).addSecs(startTime.minutesAfterMidnight * 60);
+
+    QTimeZone zone(startTime.timezone.toUtf8());
+    if(zone.isValid()) {
+        const QDateTime slid(localDate, localTime, zone, QDateTime::TransitionResolution::PreferBefore);
+        if(slid.isValid()) {
+            return slid.toUTC();
+        }
+    }
+
+    return QDateTime(localDate, localTime, QTimeZone::UTC);
 }
 
 void Scheduler::tick()
@@ -97,59 +116,70 @@ void Scheduler::tick()
     for(const Program& program : programs) {
         const ProgramStartTimeList startTimes = _source->startTimesFor(program.id);
         for(const ProgramStartTime& startTime : startTimes) {
-            QTimeZone zone(startTime.timezone.toUtf8());
-            if(zone.isValid() == false) {
-                continue;
-            }
+            const QTimeZone zone(startTime.timezone.toUtf8());
+            const QDate today = zone.isValid() ? nowUtc.toTimeZone(zone).date() : nowUtc.date();
 
-            const QDate localDate = nowUtc.toTimeZone(zone).date();
-            if(isWateringDay(program, localDate) == false) {
-                continue;
-            }
+            // Yesterday's local date is included: a late-night start time can still be
+            // inside the grace window after the UTC day has rolled over.
+            const QDate candidateDates[] = { today.addDays(-1), today };
+            for(const QDate& localDate : candidateDates) {
+                if(isWateringDay(program, localDate) == false) {
+                    continue;
+                }
 
-            bool valid = false;
-            const QDateTime scheduledUtc = resolveToUtc(startTime, localDate, &valid);
-            if(valid == false) {
-                recordOnce(program.id, startTime.id,
-                           QDateTime(localDate, QTime(0, 0), QTimeZone::UTC)
-                               .addSecs(startTime.minutesAfterMidnight * 60),
-                           FiredInstant::Outcome::Missed);
-                continue;
-            }
+                bool valid = false;
+                const QDateTime scheduledUtc = resolveToUtc(startTime, localDate, &valid);
 
-            if(_source->hasFired(program.id, startTime.id, scheduledUtc)) {
-                continue;
-            }
+                if(valid == false) {
+                    const QDateTime missedInstant = missedInstantFor(startTime, localDate);
+                    if(_source->hasFired(program.id, startTime.id, missedInstant)) {
+                        continue;
+                    }
+                    recordOnce(program.id, startTime.id, missedInstant, FiredInstant::Outcome::Missed);
+                    continue;
+                }
 
-            const qint64 lateBy = scheduledUtc.secsTo(nowUtc);
-            if(lateBy < 0) {
-                continue;
-            }
+                if(_source->hasFired(program.id, startTime.id, scheduledUtc)) {
+                    continue;
+                }
 
-            if(lateBy > GraceWindowSeconds) {
-                recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::Missed);
-                continue;
-            }
+                const qint64 lateBy = scheduledUtc.secsTo(nowUtc);
+                if(lateBy < 0) {
+                    continue;
+                }
 
-            if(rainDelayed) {
-                recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::SkippedRain);
-                continue;
-            }
+                if(lateBy > GraceWindowSeconds) {
+                    recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::Missed);
+                    continue;
+                }
 
-            recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::Ran);
-            emit programDue(program.id, startTime.id, scheduledUtc);
+                if(rainDelayed) {
+                    recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::SkippedRain);
+                    continue;
+                }
+
+                if(recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::Ran)) {
+                    emit programDue(program.id, startTime.id, scheduledUtc);
+                }
+            }
         }
     }
 }
 
-void Scheduler::recordOnce(int programId, int startTimeId, const QDateTime& scheduledAtUtc, FiredInstant::Outcome outcome)
+bool Scheduler::recordOnce(int programId, int startTimeId, const QDateTime& scheduledAtUtc, FiredInstant::Outcome outcome)
 {
     FiredInstant instant;
     instant.programId = programId;
     instant.startTimeId = startTimeId;
     instant.scheduledAtUtc = scheduledAtUtc;
     instant.outcome = outcome;
-    _source->recordFiring(instant);
+
+    const bool recorded = _source->recordFiring(instant);
+    if(recorded == false) {
+        logText(LVL_ERROR, QString("Failed to record firing for program %1, start time %2, at %3")
+                                .arg(programId).arg(startTimeId).arg(scheduledAtUtc.toString(Qt::ISODate)));
+    }
+    return recorded;
 }
 
 #include "moc_scheduler.cpp"

@@ -6,6 +6,8 @@
 #include <QObject>
 #include <QTimer>
 
+#include <Kanoop/utility/loggingbaseclass.h>
+
 #include "iclock.h"
 #include "model/firedinstant.h"
 #include "model/program.h"
@@ -20,7 +22,8 @@ class IrrigationDataSource;
  * Each tick resolves the rule to UTC against the current date, so the fire
  * instant shifts across DST transitions.
  */
-class Scheduler : public QObject
+class Scheduler : public QObject,
+                  public LoggingBaseClass
 {
     Q_OBJECT
 public:
@@ -41,8 +44,9 @@ public:
 
     /**
      * @brief Resolves @p startTime on @p localDate to a UTC instant.
-     * @param valid Set to false when the local time does not exist (spring-forward gap)
-     *              or the zone id is unrecognised; the return value is invalid in that case.
+     * @param valid Set to false when the local time does not exist (spring-forward gap),
+     *              the zone id is unrecognised, or minutesAfterMidnight is outside 0..1439;
+     *              the return value is invalid in that case.
      */
     static QDateTime resolveToUtc(const ProgramStartTime& startTime, const QDate& localDate, bool* valid);
 
@@ -51,7 +55,11 @@ signals:
     void programDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
 
 private:
-    void recordOnce(int programId, int startTimeId, const QDateTime& scheduledAtUtc, FiredInstant::Outcome outcome);
+    /** @brief Records a firing. @return Whatever IrrigationDataSource::recordFiring() returned. */
+    bool recordOnce(int programId, int startTimeId, const QDateTime& scheduledAtUtc, FiredInstant::Outcome outcome);
+
+    /** @brief Returns a best-effort UTC instant for a start time that failed to resolve, for the Missed audit row. */
+    static QDateTime missedInstantFor(const ProgramStartTime& startTime, const QDate& localDate);
 
     static constexpr qint64 GraceWindowSeconds = 120;
 
