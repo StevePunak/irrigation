@@ -283,12 +283,16 @@ The Vite project, the strict compiler settings, the test harness, and the one pi
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "noEmit": true,
     "composite": true
   },
   "include": ["vite.config.ts", "vitest.config.ts", "scripts"]
 }
 ```
+
+This file carries `composite` without `noEmit`. TypeScript 5.9 rejects the pair with
+`error TS6310: Referenced project '...tsconfig.node.json' may not disable emit`, because the root
+`tsconfig.json` lists it under `references`. Nothing in this project runs `tsc --build`, so no emit
+happens; `npm run typecheck` is `tsc --noEmit` against the root project.
 
 `web/index.html`:
 
