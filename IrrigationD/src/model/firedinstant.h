@@ -1,6 +1,8 @@
 #ifndef FIREDINSTANT_H
 #define FIREDINSTANT_H
 
+#include <Kanoop/kanoopcommon.h>
+
 #include <QDateTime>
 #include <QString>
 
@@ -23,23 +25,29 @@ public:
     /** @brief Returns the storage string for @p value. */
     static QString outcomeToString(Outcome value);
 
-    /** @brief Primary key. Zero when not yet persisted. */
     int id = 0;
-
-    /** @brief Owning program's id. */
     int programId = 0;
-
-    /** @brief Start time that fired. */
     int startTimeId = 0;
-
-    /** @brief The scheduled moment, in UTC. */
     QDateTime scheduledAtUtc;
-
-    /** @brief What happened at that moment. */
     Outcome outcome = Outcome::Ran;
 
     /** @brief Returns true when this record came from the database. */
     bool isValid() const { return id > 0; }
+
+private:
+    class OutcomeToStringMap : public KANOOP::EnumToStringMap<Outcome>
+    {
+    public:
+        OutcomeToStringMap()
+        {
+            insert(Outcome::Ran,         "ran");
+            insert(Outcome::SkippedBusy, "skipped_busy");
+            insert(Outcome::SkippedRain, "skipped_rain");
+            insert(Outcome::Missed,      "missed");
+        }
+    };
+
+    static const OutcomeToStringMap _OutcomeToStringMap;
 };
 
 #endif // FIREDINSTANT_H
