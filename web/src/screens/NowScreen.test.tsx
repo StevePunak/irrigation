@@ -198,6 +198,49 @@ describe('NowScreen concurrent actions', () => {
 
     expect(screen.queryByRole('alert')).toBeNull()
   })
+
+  it('re-enables the zone tiles when a superseded action settles', async () => {
+    const user = userEvent.setup()
+    const pending: { reject?: (reason: Error) => void } = {}
+    vi.spyOn(client, 'runZone').mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          pending.reject = reject
+        }),
+    )
+    // The stop never settles, standing in for a dropped connection.
+    vi.spyOn(client, 'stopAll').mockImplementation(() => new Promise<void>(() => {}))
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(tile).getByRole('button', { name: /run/i }))
+    await user.click(screen.getByRole('button', { name: /stop/i }))
+
+    await act(async () => {
+      pending.reject?.(new Error('zone run failed'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // One request is still outstanding, so the tiles stay disabled.
+    expect(within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i })).toBeDisabled()
+  })
+
+  it('re-enables the zone tiles once every request has settled', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'runZone').mockRejectedValue(new Error('zone run failed'))
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(tile).getByRole('button', { name: /run/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/zone run failed/i)
+    })
+    expect(within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: /run/i })).toBeEnabled()
+  })
 })
 
 describe('StopButton', () => {

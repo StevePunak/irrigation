@@ -16,6 +16,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const actionSeq = useRef(0)
+  const inFlight = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -42,6 +43,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
   const onRun = useCallback(
     (zone: Zone) => {
       const seq = (actionSeq.current += 1)
+      inFlight.current += 1
       setError(null)
       setBusy(true)
       runZone(zone, seconds)
@@ -54,9 +56,8 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
           }
         })
         .finally(() => {
-          if (actionSeq.current === seq) {
-            setBusy(false)
-          }
+          inFlight.current -= 1
+          setBusy(inFlight.current > 0)
         })
     },
     [seconds, refresh],
@@ -64,6 +65,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
   const onStop = useCallback(() => {
     const seq = (actionSeq.current += 1)
+    inFlight.current += 1
     setError(null)
     setBusy(true)
     stopAll()
@@ -76,9 +78,8 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
         }
       })
       .finally(() => {
-        if (actionSeq.current === seq) {
-          setBusy(false)
-        }
+        inFlight.current -= 1
+        setBusy(inFlight.current > 0)
       })
   }, [refresh])
 
