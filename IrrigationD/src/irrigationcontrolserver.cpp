@@ -310,41 +310,6 @@ QHttpServerResponse IrrigationControlServer::handleZoneRun(int zoneNumber,
                                QHttpServerResponder::StatusCode::Accepted);
 }
 
-QDateTime IrrigationControlServer::nextRunUtcFor(const Program& program,
-                                                 const ProgramStartTimeList& startTimes,
-                                                 const QDateTime& nowUtc)
-{
-    QDateTime earliest;
-    if(program.enabled == false) {
-        return earliest;
-    }
-
-    for(const ProgramStartTime& startTime : startTimes) {
-        const QTimeZone zone(startTime.timezone.toUtf8());
-        const QDate today = zone.isValid() ? nowUtc.toTimeZone(zone).date() : nowUtc.date();
-
-        for(int offset = 0; offset <= HorizonDays; offset++) {
-            const QDate candidate = today.addDays(offset);
-            if(Scheduler::isWateringDay(program, candidate) == false) {
-                continue;
-            }
-
-            bool valid = false;
-            const QDateTime resolved = Scheduler::resolveToUtc(startTime, candidate, &valid);
-            if(valid == false || resolved < nowUtc) {
-                continue;
-            }
-
-            if(earliest.isValid() == false || resolved < earliest) {
-                earliest = resolved;
-            }
-            break;
-        }
-    }
-
-    return earliest;
-}
-
 QHttpServerResponse IrrigationControlServer::handleProgramsGet(const QHttpServerRequest& request)
 {
     Q_UNUSED(request)
@@ -355,7 +320,7 @@ QHttpServerResponse IrrigationControlServer::handleProgramsGet(const QHttpServer
     for(const Program& program : programs) {
         const ProgramStartTimeList startTimes = _source->startTimesFor(program.id);
         const ProgramZoneList zones = _source->zonesFor(program.id);
-        const QDateTime nextRunUtc = nextRunUtcFor(program, startTimes, nowUtc);
+        const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, nowUtc);
         array.append(ProgramJson::toJson(program, startTimes, zones, nextRunUtc));
     }
     return QHttpServerResponse(array, QHttpServerResponder::StatusCode::Ok);
@@ -459,7 +424,7 @@ QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServer
                                    QHttpServerResponder::StatusCode::InternalServerError);
     }
 
-    const QDateTime nextRunUtc = nextRunUtcFor(program, startTimes, QDateTime::currentDateTimeUtc());
+    const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, QDateTime::currentDateTimeUtc());
     return QHttpServerResponse(ProgramJson::toJson(program, startTimes, zones, nextRunUtc),
                                QHttpServerResponder::StatusCode::Created);
 }
@@ -540,7 +505,7 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
                                    QHttpServerResponder::StatusCode::InternalServerError);
     }
 
-    const QDateTime nextRunUtc = nextRunUtcFor(program, startTimes, QDateTime::currentDateTimeUtc());
+    const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, QDateTime::currentDateTimeUtc());
     return QHttpServerResponse(ProgramJson::toJson(program, startTimes, zones, nextRunUtc),
                                QHttpServerResponder::StatusCode::Ok);
 }

@@ -5,12 +5,17 @@
 
 #include <Kanoop/utility/abstractthreadclass.h>
 
+#include <QDateTime>
 #include <QString>
 
 class IGpioBackend;
+class IrrigationControlServer;
 class IrrigationDataSource;
 class IrrigationSettings;
+class ProgramRunner;
+class QTimer;
 class Scheduler;
+class StopButton;
 class ZoneController;
 
 /**
@@ -50,11 +55,35 @@ public:
     /** @brief Returns the text of the most recent failure. */
     QString errorText() const { return _errorText; }
 
+public slots:
+    /** @brief Stops any running program and closes every zone. */
+    void onStopPressed();
+
+    /** @brief Starts @p programId, or records it as skipped when another program is already running. */
+    void onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
+
 protected:
     virtual void threadStarted() override;
     virtual void threadAboutToFinish() override;
 
+private slots:
+    void onManualZoneRunRequested(int zoneNumber, int seconds);
+    void onProgramRunRequested(int programId);
+    void publishStatus();
+
 private:
+    void connectComponents();
+
+    /** @brief Returns whether the master enable permits water. */
+    bool isMasterEnabled();
+
+    /** @brief Returns the earliest UTC instant at which any enabled program is next due. */
+    QDateTime nextScheduledRunUtc(const QDateTime& nowUtc);
+
+    static constexpr int StatusIntervalMilliseconds = 1000;
+    static constexpr int ControlServerReadySeconds = 10;
+    static constexpr int FiredInstantRetentionDays = 90;
+
     QString _settingsPath;
     QString _errorText;
 
@@ -62,8 +91,12 @@ private:
     IrrigationSettings* _settings = nullptr;
     IGpioBackend* _backend = nullptr;
     ZoneController* _zoneController = nullptr;
+    StopButton* _stopButton = nullptr;
     IrrigationDataSource* _dataSource = nullptr;
+    ProgramRunner* _programRunner = nullptr;
     Scheduler* _scheduler = nullptr;
+    IrrigationControlServer* _controlServer = nullptr;
+    QTimer* _statusTimer = nullptr;
 };
 
 #endif // IRRIGATIONDAEMON_H

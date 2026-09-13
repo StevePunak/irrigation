@@ -1,0 +1,17 @@
+[Unit]
+Description=Irrigation controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/irrigationd --config /etc/irrigationd.ini
+Restart=always
+RestartSec=5
+User=root
+StateDirectory=irrigationd
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

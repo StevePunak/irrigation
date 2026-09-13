@@ -51,6 +51,8 @@ target_compile_options(${PROJ} PRIVATE -Wextra -Wall -Werror)
 
 install(TARGETS ${PROJ} RUNTIME DESTINATION bin)
 
+install(FILES systemd/irrigationd.service DESTINATION lib/systemd/system)
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

@@ -109,6 +109,41 @@ bool Scheduler::isValidMinutesAfterMidnight(int minutesAfterMidnight)
     return minutesAfterMidnight >= 0 && minutesAfterMidnight < 24 * 60;
 }
 
+QDateTime Scheduler::nextRunUtc(const Program& program,
+                                const ProgramStartTimeList& startTimes,
+                                const QDateTime& nowUtc)
+{
+    QDateTime earliest;
+    if(program.enabled == false) {
+        return earliest;
+    }
+
+    for(const ProgramStartTime& startTime : startTimes) {
+        const QTimeZone zone(startTime.timezone.toUtf8());
+        const QDate today = zone.isValid() ? nowUtc.toTimeZone(zone).date() : nowUtc.date();
+
+        for(int offset = 0; offset <= HorizonDays; offset++) {
+            const QDate candidate = today.addDays(offset);
+            if(isWateringDay(program, candidate) == false) {
+                continue;
+            }
+
+            bool valid = false;
+            const QDateTime resolved = resolveToUtc(startTime, candidate, &valid);
+            if(valid == false || resolved < nowUtc) {
+                continue;
+            }
+
+            if(earliest.isValid() == false || resolved < earliest) {
+                earliest = resolved;
+            }
+            break;
+        }
+    }
+
+    return earliest;
+}
+
 void Scheduler::tick()
 {
     const QDateTime nowUtc = _clock->nowUtc();

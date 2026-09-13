@@ -53,6 +53,12 @@ public:
     /** @brief Returns whether @p minutesAfterMidnight is a legal wall-clock offset (0..1439). */
     static bool isValidMinutesAfterMidnight(int minutesAfterMidnight);
 
+    /**
+     * @brief Returns the earliest UTC instant at or after @p nowUtc at which @p program is next due.
+     * @return An invalid QDateTime when no start time resolves inside the search horizon.
+     */
+    static QDateTime nextRunUtc(const Program& program, const ProgramStartTimeList& startTimes, const QDateTime& nowUtc);
+
 signals:
     /** @brief Emitted once a scheduled start time has come due and been recorded. */
     void programDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
@@ -65,6 +71,7 @@ private:
     static QDateTime missedInstantFor(const ProgramStartTime& startTime, const QDate& localDate);
 
     static constexpr qint64 GraceWindowSeconds = 120;
+    static constexpr int HorizonDays = 366;
 
     IrrigationDataSource* _source = nullptr;
     IClock* _clock = nullptr;

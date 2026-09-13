@@ -122,9 +122,6 @@ private:
 
     static QJsonObject zoneToJson(const Zone& zone);
 
-    /** @brief Returns the earliest future UTC instant at which @p program is next due, or an invalid QDateTime when none is scheduled. */
-    static QDateTime nextRunUtcFor(const Program& program, const ProgramStartTimeList& startTimes, const QDateTime& nowUtc);
-
     /** @brief Returns whether every zone.zoneId in @p zones names a row present in @p knownZones. */
     static bool zoneIdsAreKnown(const ProgramZoneList& zones, const ZoneList& knownZones);
 
@@ -136,7 +133,6 @@ private:
     void rollbackTransaction();
 
     static const QStringList SettingsKeys;
-    static constexpr int HorizonDays = 366;
 
     QString _databasePath;
     QString _bindAddress;
