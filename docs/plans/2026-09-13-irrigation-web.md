@@ -156,7 +156,9 @@ Everything below `web/`.
 | `package.json` | Scripts and dependencies. `TZ=UTC` lives in the test scripts. |
 | `tsconfig.json` | Strict compiler settings. One project covering `src`, `scripts` and the two config files, so the type gate reaches all of them. |
 | `vite.config.ts` | Build and dev-server config. Dev proxy `/api` → `127.0.0.1:8080/admin`. |
-| `vitest.config.ts` | jsdom environment, setup file, colocated test glob. |
+| `vitest.config.ts` | jsdom environment, setup file, colocated test glob. Excludes `*.tz.test.ts`. |
+| `vitest.wallclock.config.ts` | The non-UTC run. No setup file, `*.tz.test.ts` only. |
+| `src/time/wallclock.tz.test.ts` | Wall-clock assertions under `TZ=America/Los_Angeles`. |
 | `index.html` | Single page. Viewport meta. No external origins. |
 | `src/main.tsx` | Mounts `<App/>`. |
 | `src/App.tsx` | Shell: hash routing, tab bar, connection banner, status fan-out. |
@@ -218,8 +220,9 @@ The Vite project, the strict compiler settings, the test harness, and the one pi
     "build": "tsc --noEmit && vite build && node scripts/checkBundle.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "TZ=UTC vitest run",
-    "test:watch": "TZ=UTC vitest"
+    "test": "TZ=UTC vitest run && npm run test:wallclock",
+    "test:watch": "TZ=UTC vitest",
+    "test:wallclock": "TZ=America/Los_Angeles vitest run --config vitest.wallclock.config.ts"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -424,6 +427,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'src/**/*.tz.test.ts'],
     restoreMocks: true,
   },
 })
@@ -1449,7 +1453,7 @@ Every function here takes the zone as a **required argument**. There is no overl
   - `minutesToClock(minutesAfterMidnight: number): string` — `'6:00 AM'`
   - `minutesToInputValue(minutesAfterMidnight: number): string` — `'06:00'` for `<input type="time">`
   - `inputValueToMinutes(value: string): number` — `'23:59'` → `1439`
-  - `INVALID_ZONE_MARKER = '--'`
+  - `INVALID_ZONE_MARKER = '--'` — returned by `formatClock`, `formatDayAndClock` and `minutesToClock` for anything they cannot render
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1748,19 +1752,27 @@ export function formatCountdown(seconds: number): string {
   return `${minutes}:${String(secs).padStart(2, '0')}`
 }
 
+function isValidMinutes(value: number): boolean {
+  return Number.isInteger(value) && value >= 0 && value <= 1439
+}
+
 /**
  * A start time is a wall-clock rule with no instant behind it, so this takes no
  * zone. Converting it through a Date shifts every start time by the host offset.
  */
 export function minutesToClock(minutesAfterMidnight: number): string {
-  const clamped = Math.max(0, Math.min(1439, Math.floor(minutesAfterMidnight)))
-  return clockFromHourMinute(Math.floor(clamped / 60), clamped % 60)
+  if (isValidMinutes(minutesAfterMidnight) === false) {
+    return INVALID_ZONE_MARKER
+  }
+  return clockFromHourMinute(Math.floor(minutesAfterMidnight / 60), minutesAfterMidnight % 60)
 }
 
 /** Formats wall-clock minutes for an `<input type="time">` value. */
 export function minutesToInputValue(minutesAfterMidnight: number): string {
-  const clamped = Math.max(0, Math.min(1439, Math.floor(minutesAfterMidnight)))
-  return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`
+  if (isValidMinutes(minutesAfterMidnight) === false) {
+    return '00:00'
+  }
+  return `${String(Math.floor(minutesAfterMidnight / 60)).padStart(2, '0')}:${String(minutesAfterMidnight % 60).padStart(2, '0')}`
 }
 
 /** Parses an `<input type="time">` value. Returns -1 when it will not parse. */
@@ -1777,6 +1789,19 @@ export function inputValueToMinutes(value: string): number {
   return hours * 60 + minutes
 }
 ```
+
+`isValidMinutes` guards both wall-clock functions ahead of any arithmetic. `inputValueToMinutes`
+returns `-1` for input it cannot parse, and a `Math.max`/`Math.min` clamp turns that into a
+plausible midnight while passing `NaN` straight through to produce the string `NaN:NaN NaN`.
+
+**A `TZ=UTC` suite cannot prove these two functions ignore the timezone.** A reimplementation through
+a `Date` renders identically when the host zone is UTC. Measured: `new Date(local)` + `setMinutes` +
+`toLocaleTimeString` round-trips through one zone and cancels out everywhere, while
+`new Date(Date.UTC(...))` + `setUTCMinutes` + `toLocaleTimeString` renders minute 0 as `4:00 PM`
+under `America/Los_Angeles`. The second shape is what gets written by someone who remembers the API
+sends UTC and forgets that a start time is not an instant. `src/time/wallclock.tz.test.ts`, run
+under the non-UTC config, is what catches it; the file asserts the host zone is not UTC so it fails
+loudly instead of passing vacuously.
 
 The 12-hour string is assembled from `formatToParts` rather than taken from `Intl`'s own `hour12` output. ICU emits a narrow no-break space before the day period in recent versions, so a test comparing against `'6:00 AM'` typed with an ordinary space fails on some runtimes and passes on others.
 
