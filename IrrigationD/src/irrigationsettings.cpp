@@ -18,7 +18,9 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
 {
     QMap<int, quint32> result;
 
-    QString raw = _settings.value(KEY_ZONES).toString();
+    QVariant value = _settings.value(KEY_ZONES);
+    // QSettings returns a QStringList for an unquoted comma-separated value.
+    QString raw = value.typeId() == QMetaType::QStringList ? value.toStringList().join(',') : value.toString();
     const QStringList pairs = raw.split(',', Qt::SkipEmptyParts);
     for(const QString& pair : pairs) {
         QStringList parts = pair.split('=');
