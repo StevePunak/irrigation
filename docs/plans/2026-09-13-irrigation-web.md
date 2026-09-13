@@ -136,7 +136,7 @@ The full program with its nested lists. `id` is omitted on create; nested `id` a
 The `settings` table is key/value TEXT, so **every value is a string**, including the booleans.
 
 ```json
-{ "rain_delay_until": "", "master_enabled": "true", "max_zone_seconds": "1800", "log_level": "info" }
+{ "rain_delay_until": "", "master_enabled": "1", "max_zone_seconds": "3600", "log_level": "info" }
 ```
 
 `PUT` takes a partial map of the same shape. The daemon's `settingValue()` returns an empty `QString` both for an absent key and for a key holding an empty value, so `""` and absent both mean "unset" and `""` is how the UI clears the rain delay.
@@ -4085,6 +4085,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProgramEditor, { emptyDraft, validationError } from './ProgramEditor'
 import * as client from '../api/client'
+import { ApiError } from '../api/types'
 import { morningProgram, zoneFixtures } from '../test/fixtures'
 
 const onDone = vi.fn()
@@ -4119,11 +4120,16 @@ afterEach(() => {
 })
 
 describe('emptyDraft', () => {
-  it('defaults a new program to the controller timezone', () => {
-    const draft = emptyDraft(LA)
-    expect(draft.startTimes).toEqual([{ minutesAfterMidnight: 360, timezone: LA }])
-    expect(draft.dayMode).toBe('DaysOfWeek')
-    expect(draft.enabled).toBe(true)
+  it('defaults the start time to the controller timezone', () => {
+    expect(emptyDraft(LA).startTimes).toEqual([{ minutesAfterMidnight: 360, timezone: LA }])
+  })
+
+  it('defaults the day mode to DaysOfWeek', () => {
+    expect(emptyDraft(LA).dayMode).toBe('DaysOfWeek')
+  })
+
+  it('defaults enabled to true', () => {
+    expect(emptyDraft(LA).enabled).toBe(true)
   })
 })
 
@@ -4251,6 +4257,21 @@ describe('creating a program', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/name/i)
     expect(createProgram).not.toHaveBeenCalled()
   })
+
+  it('surfaces a rejected save and does not close the editor', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'createProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
+
+    renderEditor(null)
+    await user.type(screen.getByLabelText(/program name/i), 'Evening')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onCancel).not.toHaveBeenCalled()
+  })
 })
 
 describe('editing a program', () => {
@@ -4289,7 +4310,7 @@ describe('editing a program', () => {
     ])
   })
 
-  it('renumbers sequences when a zone moves up', async () => {
+  it('save renumbers zone sequence from the final array order after a move', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
 
@@ -4306,7 +4327,7 @@ describe('editing a program', () => {
     ])
   })
 
-  it('renumbers sequences when a zone is removed from the middle', async () => {
+  it('save renumbers zone sequence from the final array order after removing a middle zone', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
 
@@ -4339,6 +4360,62 @@ describe('editing a program', () => {
     const draft = updateProgram.mock.calls[0]![1]
     expect(draft.startTimes).toHaveLength(2)
     expect(draft.startTimes[1]!.timezone).toBe(LA)
+  })
+
+  it('shows the surviving start time after removing an earlier one', async () => {
+    const user = userEvent.setup()
+    renderEditor(morningProgram)
+
+    await user.click(screen.getByRole('button', { name: /add start time/i }))
+    const second = screen.getByLabelText(/start time 2/i)
+    await user.clear(second)
+    await user.type(second, '19:00')
+
+    await user.click(screen.getByRole('button', { name: /remove start time 1/i }))
+
+    expect(screen.getByLabelText(/start time 1/i)).toHaveValue('19:00')
+  })
+})
+
+describe('blank start times', () => {
+  it('refuses to save while a start time is blank', async () => {
+    const user = userEvent.setup()
+    const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    renderEditor(morningProgram)
+    await user.clear(screen.getByLabelText(/start time 1/i))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/start time 1 needs a valid time/i)
+    expect(updateProgram).not.toHaveBeenCalled()
+  })
+
+  it('names the row that is blank when several start times exist', async () => {
+    const user = userEvent.setup()
+    const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    renderEditor(morningProgram)
+    await user.click(screen.getByRole('button', { name: /add start time/i }))
+    await user.clear(screen.getByLabelText(/start time 2/i))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/start time 2 needs a valid time/i)
+    expect(updateProgram).not.toHaveBeenCalled()
+  })
+
+  it('saves once the blank start time is filled back in', async () => {
+    const user = userEvent.setup()
+    const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    renderEditor(morningProgram)
+    await user.clear(screen.getByLabelText(/start time 1/i))
+    await user.type(screen.getByLabelText(/start time 1/i), '07:30')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(updateProgram).toHaveBeenCalledTimes(1)
+    })
+    expect(updateProgram.mock.calls[0]![1].startTimes[0]!.minutesAfterMidnight).toBe(450)
   })
 })
 
@@ -4373,13 +4450,27 @@ describe('deleting a program', () => {
     renderEditor(null)
     expect(screen.queryByRole('button', { name: /delete/i })).toBeNull()
   })
+
+  it('surfaces a rejected delete and does not close the editor', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'deleteProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
+
+    renderEditor(morningProgram)
+    await user.click(screen.getByRole('button', { name: /delete/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onCancel).not.toHaveBeenCalled()
+  })
 })
 ```
 
 What each one kills:
 
 - `stores the zone database id, not the zone number` reads the option's value and the option's visible label separately. The label shows `3 · Roses`, the value is `9`; an implementation that sets `value={zone.number}` renders an option labelled `3 · Roses` with value `3`, the assertion fails on the value, and the daemon would otherwise have inserted a foreign key pointing at a different valve.
-- `renumbers sequences when a zone moves up` and `when a zone is removed from the middle` both assert the sequence numbers, not just the order. Reordering the array while keeping the stored sequences produces a program that renders in the new order in the browser and waters in the old order on the controller, because `zonesFor()` sorts by `sequence`.
+- `save renumbers zone sequence from the final array order after a move` and `...after removing a middle zone` assert the saved sequence numbers alongside the order. Reordering the array while keeping the stored sequences produces a program that renders in the new order in the browser and waters in the old order on the controller, because `zonesFor()` sorts by `sequence`. `onSave` is the only place sequences are renumbered, so these two tests guard that call.
+- `shows the surviving start time after removing an earlier one` fails for an uncontrolled `defaultValue` input: rows are keyed by index, so React reuses the removed row's node and displays its time over the surviving entry's.
+- `refuses to save while a start time is blank` and `names the row that is blank when several start times exist` fail when `onSave` reads only the draft. A cleared field leaves the draft holding the last time that parsed, so Save would send a time the screen no longer shows.
 - `defaults an added start time to the controller timezone` runs with the host at `TZ=UTC` and the controller at `America/Los_Angeles`. Defaulting to `Intl.DateTimeFormat().resolvedOptions().timeZone` writes `UTC` into the row and the program fires seven hours early forever.
 - `accepts the last minute of the day` pins the 1439 boundary, the value an off-by-one in the minute conversion lands on.
 - `does nothing when the confirmation is declined` fails for a handler that fires the delete and asks afterwards.
@@ -4450,7 +4541,7 @@ export function validationError(draft: ProgramDraft): string | null {
   return null
 }
 
-/** Rewrites `sequence` from array position so a reorder reaches the daemon. */
+/** Sets each zone's `sequence` to its array position, 1-based. */
 function resequence(zones: ProgramDraft['zones']): ProgramDraft['zones'] {
   return zones.map((zone, index) => ({ ...zone, sequence: index + 1 }))
 }
@@ -4473,6 +4564,11 @@ export default function ProgramEditor({
   const [draft, setDraft] = useState<ProgramDraft>(() =>
     program === null ? emptyDraft(controllerZone) : toDraft(program),
   )
+  const [startTimeText, setStartTimeText] = useState<string[]>(() =>
+    (program === null ? emptyDraft(controllerZone) : toDraft(program)).startTimes.map((start) =>
+      minutesToInputValue(start.minutesAfterMidnight),
+    ),
+  )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -4481,6 +4577,12 @@ export default function ProgramEditor({
   }, [])
 
   const onSave = useCallback(async () => {
+    const unparsed = startTimeText.findIndex((text) => inputValueToMinutes(text) < 0)
+    if (unparsed >= 0) {
+      setError(`Start time ${unparsed + 1} needs a valid time.`)
+      return
+    }
+    // Sequence numbers in `draft.zones` are stale between edits; onSave is what makes them match array order.
     const normalised: ProgramDraft = { ...draft, name: draft.name.trim(), zones: resequence(draft.zones) }
     const invalid = validationError(normalised)
     if (invalid !== null) {
@@ -4501,7 +4603,7 @@ export default function ProgramEditor({
     } finally {
       setSaving(false)
     }
-  }, [draft, program, onDone])
+  }, [draft, startTimeText, program, onDone])
 
   const onDelete = useCallback(async () => {
     if (program === null) {
@@ -4527,7 +4629,7 @@ export default function ProgramEditor({
       const reordered = [...current.zones]
       const [moved] = reordered.splice(index, 1)
       reordered.splice(target, 0, moved!)
-      return { ...current, zones: resequence(reordered) }
+      return { ...current, zones: reordered }
     })
   }, [])
 
@@ -4629,9 +4731,11 @@ export default function ProgramEditor({
             {`Start time ${index + 1}`}
             <input
               type="time"
-              value={minutesToInputValue(start.minutesAfterMidnight)}
+              value={startTimeText[index] ?? minutesToInputValue(start.minutesAfterMidnight)}
               onChange={(event) => {
-                const minutes = inputValueToMinutes(event.target.value)
+                const text = event.target.value
+                setStartTimeText((current) => current.map((entry, i) => (i === index ? text : entry)))
+                const minutes = inputValueToMinutes(text)
                 if (minutes < 0) {
                   return
                 }
@@ -4647,6 +4751,7 @@ export default function ProgramEditor({
           <button
             type="button"
             onClick={() => {
+              setStartTimeText((current) => current.filter((_, i) => i !== index))
               patch({ startTimes: draft.startTimes.filter((_, i) => i !== index) })
             }}
           >
@@ -4657,6 +4762,7 @@ export default function ProgramEditor({
       <button
         type="button"
         onClick={() => {
+          setStartTimeText((current) => [...current, minutesToInputValue(360)])
           patch({
             startTimes: [...draft.startTimes, { minutesAfterMidnight: 360, timezone: controllerZone }],
           })
@@ -4721,7 +4827,7 @@ export default function ProgramEditor({
           <button
             type="button"
             onClick={() => {
-              patch({ zones: resequence(draft.zones.filter((_, i) => i !== index)) })
+              patch({ zones: draft.zones.filter((_, i) => i !== index) })
             }}
           >
             {`Remove zone ${index + 1}`}
@@ -4736,10 +4842,7 @@ export default function ProgramEditor({
             return
           }
           patch({
-            zones: resequence([
-              ...draft.zones,
-              { zoneId: first.id, sequence: draft.zones.length + 1, durationSeconds: 600 },
-            ]),
+            zones: [...draft.zones, { zoneId: first.id, sequence: draft.zones.length + 1, durationSeconds: 600 }],
           })
         }}
       >
@@ -4930,18 +5033,20 @@ cd web && npm test && npm run typecheck
 
 Expected: every editor case passes.
 
-- [ ] **Step 7: Prove the two identifier assertions can fail**
+- [ ] **Step 7: Prove the guards can fail**
 
 Change the zone picker's `value` to `String(candidate.id)` → `String(candidate.number)` and confirm `stores the zone database id, not the zone number` fails. Revert.
 
-Delete the `resequence(...)` call from `moveZone` and confirm `renumbers sequences when a zone moves up` fails on the sequence numbers while the order assertion would still have passed. Revert.
+Delete the `resequence(...)` call from `onSave` and confirm both `save renumbers zone sequence...` tests fail. Revert.
+
+Delete the blank-start-time guard at the top of `onSave` and confirm exactly `refuses to save while a start time is blank` and `names the row that is blank when several start times exist` fail. Revert.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 cd /home/spunak/src/punak/irrigation
 git add web
-git commit -m "feat: add the program editor"
+git commit --only -m "feat: add the program editor" -- web
 ```
 
 ---
@@ -4950,7 +5055,9 @@ git commit -m "feat: add the program editor"
 
 Spec §8: rain delay, master enable, maximum zone runtime, zone names.
 
-The `settings` table is key/value TEXT, so every value crosses the wire as a string. `Boolean('false')` is `true` in JavaScript, and a master-enable switch built on that reads a disabled controller as enabled.
+The `settings` table is key/value TEXT, so every value crosses the wire as a string. The daemon accepts only `"0"` and `"1"` for `master_enabled` and stops watering only when the stored value is exactly `"0"` (`isValidSettingValue()` in `irrigationcontrolserver.cpp`, the master check in `scheduler.cpp`). `Boolean('0')` is `true` in JavaScript, so a truthiness read shows a disabled controller as enabled. A read that matches spellings such as `'false'` goes wrong the other way: it shows watering off while the daemon keeps running programs.
+
+`max_zone_seconds` is seeded as `'3600'`, so the screen falls back to 3600 seconds when the key is absent. The committed daemon does not read this key yet; see Known gaps.
 
 The daemon's `settingValue()` returns an empty `QString` both for an absent key and for a key holding an empty value, so `''` and missing are the same thing on both sides and `''` is how the rain delay is cleared.
 
@@ -4963,11 +5070,11 @@ The daemon's `settingValue()` returns an empty `QString` both for an absent key 
 - Consumes: `getSettings`, `putSettings`, `getZones`, `putZone` from Task 2; `formatDayAndClock` from Task 3
 - Produces:
   - `const SETTING_KEYS = { rainDelayUntil: 'rain_delay_until', masterEnabled: 'master_enabled', maxZoneSeconds: 'max_zone_seconds', logLevel: 'log_level' } as const`
-  - `const DEFAULT_MAX_ZONE_SECONDS = 1800`
-  - `parseBoolean(value: string | undefined, fallback: boolean): boolean`
+  - `const DEFAULT_MAX_ZONE_SECONDS = 3600`
+  - `parseMasterEnabled(value: string | undefined): boolean`
   - `parseInteger(value: string | undefined, fallback: number): number`
   - `parseInstant(value: string | undefined): string | null`
-  - `serializeBoolean(value: boolean): string`
+  - `serializeMasterEnabled(enabled: boolean): string`
 
 - [ ] **Step 1: Write the failing settings-map tests**
 
@@ -4978,39 +5085,37 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_MAX_ZONE_SECONDS,
   SETTING_KEYS,
-  parseBoolean,
   parseInstant,
   parseInteger,
-  serializeBoolean,
+  parseMasterEnabled,
+  serializeMasterEnabled,
 } from './settingsMap'
 
-describe('parseBoolean', () => {
-  it('reads the string "false" as false', () => {
-    expect(parseBoolean('false', true)).toBe(false)
-    expect(parseBoolean('False', true)).toBe(false)
-    expect(parseBoolean('0', true)).toBe(false)
+describe('parseMasterEnabled', () => {
+  it('reads "0" as disabled', () => {
+    expect(parseMasterEnabled('0')).toBe(false)
   })
 
-  it('reads the string "true" as true', () => {
-    expect(parseBoolean('true', false)).toBe(true)
-    expect(parseBoolean('True', false)).toBe(true)
-    expect(parseBoolean('1', false)).toBe(true)
+  it('reads "1" as enabled', () => {
+    expect(parseMasterEnabled('1')).toBe(true)
   })
 
-  it('falls back for an absent or empty value', () => {
-    expect(parseBoolean(undefined, true)).toBe(true)
-    expect(parseBoolean('', true)).toBe(true)
-    expect(parseBoolean(undefined, false)).toBe(false)
+  it('reads an absent or empty value as enabled, as the daemon does', () => {
+    expect(parseMasterEnabled(undefined)).toBe(true)
+    expect(parseMasterEnabled('')).toBe(true)
   })
 
-  it('falls back for anything it does not recognise', () => {
-    expect(parseBoolean('maybe', false)).toBe(false)
-    expect(parseBoolean('maybe', true)).toBe(true)
+  it('reads every other spelling as enabled, as the daemon does', () => {
+    expect(parseMasterEnabled('false')).toBe(true)
+    expect(parseMasterEnabled('off')).toBe(true)
+    expect(parseMasterEnabled(' 0')).toBe(true)
   })
 
-  it('round-trips through serializeBoolean', () => {
-    expect(parseBoolean(serializeBoolean(false), true)).toBe(false)
-    expect(parseBoolean(serializeBoolean(true), false)).toBe(true)
+  it('serializes to the only two values the daemon accepts', () => {
+    expect(serializeMasterEnabled(false)).toBe('0')
+    expect(serializeMasterEnabled(true)).toBe('1')
+    expect(parseMasterEnabled(serializeMasterEnabled(false))).toBe(false)
+    expect(parseMasterEnabled(serializeMasterEnabled(true))).toBe(true)
   })
 })
 
@@ -5021,9 +5126,9 @@ describe('parseInteger', () => {
   })
 
   it('falls back for an absent, empty or unparseable value', () => {
-    expect(parseInteger(undefined, DEFAULT_MAX_ZONE_SECONDS)).toBe(1800)
-    expect(parseInteger('', DEFAULT_MAX_ZONE_SECONDS)).toBe(1800)
-    expect(parseInteger('half an hour', DEFAULT_MAX_ZONE_SECONDS)).toBe(1800)
+    expect(parseInteger(undefined, DEFAULT_MAX_ZONE_SECONDS)).toBe(3600)
+    expect(parseInteger('', DEFAULT_MAX_ZONE_SECONDS)).toBe(3600)
+    expect(parseInteger('half an hour', DEFAULT_MAX_ZONE_SECONDS)).toBe(3600)
   })
 
   it('rejects a partially numeric string rather than truncating it', () => {
@@ -5057,7 +5162,7 @@ describe('SETTING_KEYS', () => {
 })
 ```
 
-`reads the string "false" as false` is the whole point. `Boolean('false')` and `!!'false'` and `JSON.parse` on a bare `false` string each go a different wrong way; only an explicit match against the known spellings gets it right.
+`reads "0" as disabled` kills a truthiness read, since `Boolean('0')` is `true`. `reads every other spelling as enabled, as the daemon does` kills a spelling matcher that accepts `'false'` or `'off'`: the daemon waters on those, so the switch would show watering off while the valves run.
 
 `rejects a partially numeric string rather than truncating it` catches `parseInt('1800s')`, which returns 1800 and looks correct until the day the value is `'30m'` and the ceiling silently becomes 30 seconds.
 
@@ -5081,25 +5186,16 @@ export const SETTING_KEYS = {
   logLevel: 'log_level',
 } as const
 
-export const DEFAULT_MAX_ZONE_SECONDS = 1800
+export const DEFAULT_MAX_ZONE_SECONDS = 3600
 
-const TRUE_SPELLINGS = ['true', '1', 'yes', 'on']
-const FALSE_SPELLINGS = ['false', '0', 'no', 'off']
-
-/** Every settings value is TEXT. `Boolean('false')` is true, so match explicitly. */
-export function parseBoolean(value: string | undefined, fallback: boolean): boolean {
-  const normalised = (value ?? '').trim().toLowerCase()
-  if (TRUE_SPELLINGS.includes(normalised)) {
-    return true
-  }
-  if (FALSE_SPELLINGS.includes(normalised)) {
-    return false
-  }
-  return fallback
+/** Disabled only by the exact value '0', matching the daemon's scheduler. Widening the match shows watering off while the valves still run. */
+export function parseMasterEnabled(value: string | undefined): boolean {
+  return value !== '0'
 }
 
-export function serializeBoolean(value: boolean): string {
-  return value ? 'true' : 'false'
+/** The daemon rejects every value except '0' and '1' with a 400. */
+export function serializeMasterEnabled(enabled: boolean): string {
+  return enabled ? '1' : '0'
 }
 
 export function parseInteger(value: string | undefined, fallback: number): number {
@@ -5142,7 +5238,7 @@ beforeEach(() => {
   vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
   vi.spyOn(client, 'getSettings').mockResolvedValue({
     rain_delay_until: '',
-    master_enabled: 'true',
+    master_enabled: '1',
     max_zone_seconds: '1800',
     log_level: 'info',
   })
@@ -5163,9 +5259,9 @@ describe('SettingsScreen', () => {
     expect(screen.getByTestId('rain-delay-state')).toHaveTextContent(/no rain delay/i)
   })
 
-  it('reads the string "false" as disabled', async () => {
+  it('reads "0" as disabled', async () => {
     vi.spyOn(client, 'getSettings').mockResolvedValue({
-      master_enabled: 'false',
+      master_enabled: '0',
       max_zone_seconds: '1800',
     })
 
@@ -5173,13 +5269,13 @@ describe('SettingsScreen', () => {
     expect(await screen.findByLabelText(/master enable/i)).not.toBeChecked()
   })
 
-  it('falls back to 30 minutes when the ceiling is missing', async () => {
-    vi.spyOn(client, 'getSettings').mockResolvedValue({ master_enabled: 'true' })
+  it('falls back to 60 minutes when the ceiling is missing', async () => {
+    vi.spyOn(client, 'getSettings').mockResolvedValue({ master_enabled: '1' })
     render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
-    expect(await screen.findByLabelText(/maximum zone runtime/i)).toHaveValue(30)
+    expect(await screen.findByLabelText(/maximum zone runtime/i)).toHaveValue(60)
   })
 
-  it('sends the master enable as a string', async () => {
+  it('sends the master enable as "0" or "1"', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
 
@@ -5187,7 +5283,7 @@ describe('SettingsScreen', () => {
     await user.click(await screen.findByLabelText(/master enable/i))
 
     await waitFor(() => {
-      expect(putSettings).toHaveBeenCalledWith({ master_enabled: 'false' })
+      expect(putSettings).toHaveBeenCalledWith({ master_enabled: '0' })
     })
   })
 
@@ -5230,16 +5326,19 @@ describe('SettingsScreen', () => {
     await waitFor(() => {
       expect(putSettings).toHaveBeenCalledTimes(1)
     })
-    expect(putSettings.mock.calls[0]![0]).toEqual({
-      rain_delay_until: '2026-09-15T20:00:00.000Z',
-    })
+    const sent = putSettings.mock.calls[0]![0]
+    expect(Object.keys(sent)).toEqual(['rain_delay_until'])
+    expect(sent.rain_delay_until).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+    const offset = Date.parse(sent.rain_delay_until!) - Date.parse('2026-09-15T20:00:00Z')
+    expect(offset).toBeGreaterThanOrEqual(0)
+    expect(offset).toBeLessThan(60_000)
   })
 
   it('clears a rain delay with an empty string', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     vi.spyOn(client, 'getSettings').mockResolvedValue({
       rain_delay_until: '2026-09-15T20:00:00Z',
-      master_enabled: 'true',
+      master_enabled: '1',
       max_zone_seconds: '1800',
     })
     const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
@@ -5255,7 +5354,7 @@ describe('SettingsScreen', () => {
   it('renders an active rain delay in the controller zone', async () => {
     vi.spyOn(client, 'getSettings').mockResolvedValue({
       rain_delay_until: '2026-09-15T20:00:00Z',
-      master_enabled: 'true',
+      master_enabled: '1',
       max_zone_seconds: '1800',
     })
 
@@ -5325,9 +5424,9 @@ describe('SettingsScreen', () => {
 
 What each one kills:
 
-- `reads the string "false" as disabled` — any truthiness-based read shows a disabled controller as enabled, which is the state where nothing waters and the UI says everything is fine.
-- `sends the master enable as a string` — the settings table is TEXT. A JSON boolean stores `1`/`0` or fails the bind depending on how the daemon reads it.
-- `sets a rain delay as a UTC instant` — the assertion is an exact ISO string against a frozen clock, so a local-time string without the `Z`, or a date-only string, fails.
+- `reads "0" as disabled` — a truthiness read shows a disabled controller as enabled, which is the state where nothing waters and the UI says everything is fine.
+- `sends the master enable as "0" or "1"` — the daemon answers any other value with a 400 and a JSON boolean fails its string check, so the switch would never turn watering off.
+- `sets a rain delay as a UTC instant` — the assertion requires the full ISO shape ending in `Z` and an instant less than a minute after two days past the frozen start, so a local-time string without the `Z`, a date-only string, or a duration counted in hours fails. `shouldAdvanceTime` moves the clock during the click, so the sent instant lands milliseconds after the frozen start and the bound absorbs that.
 - `carries the enabled flag through a rename` — `PUT /admin/zones/{number}` takes the whole row. A body carrying only `{ name }` re-enables a zone the user deliberately turned off, and zone 7 in the fixtures is the one that is off.
 - `renames a zone by its zone number` asserts both `number` and `id` on the argument, the same transposition guard as the Now screen.
 - `shows no rain delay for an empty value` — treating `''` as a date renders `Invalid Date` or `NaN`, which reads as a bug rather than as "no delay set".
@@ -5343,10 +5442,10 @@ import type { SettingsMap, Zone } from '../api/types'
 import {
   DEFAULT_MAX_ZONE_SECONDS,
   SETTING_KEYS,
-  parseBoolean,
   parseInstant,
   parseInteger,
-  serializeBoolean,
+  parseMasterEnabled,
+  serializeMasterEnabled,
 } from '../settings/settingsMap'
 import { formatDayAndClock } from '../time/zonedformat'
 import type { ScreenProps } from './screenProps'
@@ -5393,7 +5492,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
     [refresh],
   )
 
-  const masterEnabled = parseBoolean(settings[SETTING_KEYS.masterEnabled], true)
+  const masterEnabled = parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])
   const rainDelayUntil = parseInstant(settings[SETTING_KEYS.rainDelayUntil])
   const controllerZone = status?.timezone ?? ''
 
@@ -5436,7 +5535,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
           type="checkbox"
           checked={masterEnabled}
           onChange={(event) => {
-            void write({ [SETTING_KEYS.masterEnabled]: serializeBoolean(event.target.checked) })
+            void write({ [SETTING_KEYS.masterEnabled]: serializeMasterEnabled(event.target.checked) })
           }}
         />
       </label>
@@ -5528,14 +5627,14 @@ Expected: every settings case passes.
 
 - [ ] **Step 7: Prove the boolean guard can fail**
 
-Replace `parseBoolean(settings[SETTING_KEYS.masterEnabled], true)` with `Boolean(settings[SETTING_KEYS.masterEnabled])`, run `npm test -- SettingsScreen`, and confirm `reads the string "false" as disabled` fails. Revert.
+Replace `parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])` with `Boolean(settings[SETTING_KEYS.masterEnabled])`, run `npm test -- SettingsScreen`, and confirm `reads "0" as disabled` fails. Revert.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 cd /home/spunak/src/punak/irrigation
 git add web
-git commit -m "feat: add the Settings screen"
+git commit --only -m "feat: add the Settings screen" -- web
 ```
 
 ---
@@ -5871,7 +5970,7 @@ Expected: every test passes, `tsc` exits zero, the bundle guard passes.
 ```bash
 cd /home/spunak/src/punak/irrigation
 git add web
-git commit -m "feat: add the production build guard and the web README"
+git commit --only -m "feat: add the production build guard and the web README" -- web
 ```
 
 ---
@@ -5936,7 +6035,7 @@ Spec §8 is three screens, a polling interval and a timezone rule. Everything be
 
 **9. `PUT /api/programs/{id}` sends the whole program**, including start times and zones, on every write — the enable toggle on the list included. The daemon replaces the nested rows, so a partial body deletes them.
 
-**10. Settings values are strings in both directions**, because the `settings` table is key/value TEXT and `settingValue()` returns a `QString`.
+**10. Settings values are strings in both directions**, because the `settings` table is key/value TEXT and `settingValue()` returns a `QString`. `master_enabled` is `"1"` or `"0"`, the only two values the daemon's validator accepts.
 
 **11. Zone tiles render exactly the zones `/api/zones` returns**, sorted by `number`. Rendering a fixed eight would let a tap POST to a zone the daemon does not have.
 
@@ -5953,6 +6052,7 @@ Three sessions work this tree on disjoint subtrees. These were established by th
 - **`GET /admin/programs` will carry a per-program `nextRunUtc`.** Ruled on the daemon side and recorded in its ledger for the Task 9 dispatch. This plan still decodes the field as optional, so the UI is correct whether or not that lands first.
 - **The document root is `/var/www/irrigation/html`** and the `irrigation-web_1.0.bb` recipe hard-fails the image build when `web/dist/` is missing or holds no `index.html`. There is no `nodejs` in the image; the bundle is static.
 - **nginx does `try_files $uri $uri/ /index.html`** and proxies `/api/` to `http://127.0.0.1:8080` with `Host`, `X-Real-IP`, `X-Forwarded-For` and `X-Forwarded-Proto` set. The daemon binds loopback only.
+- **`master_enabled` is `"0"` or `"1"` on the wire.** `isValidSettingValue()` in `IrrigationD/src/irrigationcontrolserver.cpp` rejects anything else with a 400, and `scheduler.cpp` stops watering only when the stored value is exactly `"0"`.
 
 ---
 
@@ -5963,3 +6063,4 @@ Three sessions work this tree on disjoint subtrees. These were established by th
 - **The `log_level` setting is rendered by no screen.** Spec §8 lists four things on Settings and this is not one of them. The daemon plan carries the same row as a known gap on its side.
 - **There is no optimistic update anywhere.** Every write is followed by a reload or a status refresh. On a LAN with a loopback daemon that costs one round trip and removes a class of bug where the screen shows a state the controller rejected.
 - **Nothing tests the real bundle against the real daemon.** Task 1 Step 8 is a manual `curl` through the dev proxy and Task 10 Step 5 is a manual look at `dist/index.html`. An end-to-end check belongs with the Yocto layer's image test, which is a different plan.
+- **The daemon does not read `max_zone_seconds`.** The Settings screen writes the key spec §6 names, and the daemon validates and stores it, but `ZoneController` clamps runs to `limits/maxZoneSeconds` from the INI file (`IrrigationD/src/irrigationsettings.h`, default 3600), read once at startup. Until the daemon reads the settings key, changing the ceiling on the Settings screen changes nothing the valves do.
