@@ -64,3 +64,84 @@ button, input, select {
   color: var(--ink);
   padding: 0 var(--gap);
 }
+
+.running {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: var(--gap);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  font-size: 1.3rem;
+}
+
+.running__clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--running);
+}
+
+.stop {
+  min-height: 96px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: var(--danger-ink);
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.stop:active {
+  filter: brightness(0.85);
+}
+
+.zone-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--gap);
+}
+
+.zone-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--gap);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.zone-tile[data-running='true'] {
+  border-color: var(--running);
+  box-shadow: inset 0 0 0 2px var(--running);
+}
+
+.zone-tile__number {
+  font-size: 0.8rem;
+  color: var(--ink-dim);
+}
+
+.zone-tile__name {
+  font-weight: 600;
+}
+
+.zone-tile__off {
+  font-size: 0.8rem;
+  color: var(--warn);
+}
+
+.alert {
+  padding: var(--gap);
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: var(--danger-ink);
+}
+
+.quick-run {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
