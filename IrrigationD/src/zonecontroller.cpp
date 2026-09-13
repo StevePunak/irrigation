@@ -1,5 +1,7 @@
 #include "zonecontroller.h"
 
+#include <limits>
+
 ZoneController::ZoneController(IGpioBackend* backend,
                                const QMap<int, quint32>& zoneGpioMap,
                                bool activeLow,
@@ -7,7 +9,6 @@ ZoneController::ZoneController(IGpioBackend* backend,
                                QObject* parent) :
     QObject(parent),
     LoggingBaseClass("zone"),
-    _backend(backend),
     _zoneGpioMap(zoneGpioMap),
     _maxZoneSeconds(maxZoneSeconds),
     _bank(new OutputBank(backend, QStringLiteral("irrigationd-zones"), zoneGpioMap.values(), activeLow, this))
@@ -31,11 +32,11 @@ bool ZoneController::begin()
         return false;
     }
 
+    _watchdogTimer.start();
+
     if(writeExclusive(0) == false) {
         return false;
     }
-
-    _watchdogTimer.start();
 
     return true;
 }
@@ -77,8 +78,10 @@ bool ZoneController::openZone(int zoneNumber, int seconds)
     _openZone = zoneNumber;
     _deadlineUtc = QDateTime::currentDateTimeUtc().addSecs(clamped);
 
+    const qint64 timerMilliseconds = qMin<qint64>(static_cast<qint64>(clamped) * 1000,
+                                                  std::numeric_limits<int>::max());
     _closeTimer.setSingleShot(true);
-    _closeTimer.start(clamped * 1000);
+    _closeTimer.start(static_cast<int>(timerMilliseconds));
 
     if(previous != 0 && previous != zoneNumber) {
         emit zoneClosed(previous);
@@ -88,27 +91,36 @@ bool ZoneController::openZone(int zoneNumber, int seconds)
     return true;
 }
 
-void ZoneController::allOff()
+bool ZoneController::allOff()
 {
-    _closeTimer.stop();
-
     if(_bank->isRequested() == false) {
-        _openZone = 0;
-        return;
+        _closeTimer.stop();
+        if(_openZone != 0) {
+            const int zoneNumber = _openZone;
+            _openZone = 0;
+            emit zoneClosed(zoneNumber);
+        }
+        return true;
     }
 
     const int zoneNumber = _openZone;
     if(writeExclusive(0) == false) {
         logText(LVL_ERROR, QString("allOff failed: %1").arg(_errorText));
-        return;
+        if(zoneNumber != 0) {
+            _closeTimer.start(RetryIntervalMilliseconds);
+        }
+        return false;
     }
 
+    _closeTimer.stop();
     _openZone = 0;
     _deadlineUtc = QDateTime();
 
     if(zoneNumber != 0) {
         emit zoneClosed(zoneNumber);
     }
+
+    return true;
 }
 
 int ZoneController::secondsRemaining() const
@@ -123,7 +135,8 @@ int ZoneController::secondsRemaining() const
 
 void ZoneController::setWatchdogInterval(const TimeSpan& value)
 {
-    _watchdogTimer.setInterval(static_cast<int>(value.totalMilliseconds()));
+    const int milliseconds = qMax(50, static_cast<int>(value.totalMilliseconds()));
+    _watchdogTimer.setInterval(milliseconds);
 }
 
 void ZoneController::onCloseTimer()
@@ -153,23 +166,24 @@ void ZoneController::onWatchdogTimer()
         return;
     }
 
-    int energised = 0;
-    for(bool value : actual) {
-        if(value) {
-            energised++;
-        }
+    QMap<quint32, bool> expected;
+    for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
+        expected.insert(it.value(), it.key() == _openZone);
     }
+    const bool mismatch = actual != expected;
 
     const bool pastDeadline = _openZone != 0
                               && _deadlineUtc.isValid()
                               && QDateTime::currentDateTimeUtc() > _deadlineUtc;
 
-    if(energised > 1 || pastDeadline || (energised > 0 && _openZone == 0)) {
+    if(mismatch || pastDeadline) {
         const int trippedOn = _openZone;
-        logText(LVL_ERROR, QString("Watchdog tripped: %1 line(s) energised, open zone %2")
-                               .arg(energised).arg(_openZone));
-        allOff();
-        emit watchdogTripped(trippedOn);
+        logText(LVL_ERROR, QString("Watchdog tripped: open zone %1").arg(_openZone));
+        if(allOff() == true) {
+            emit watchdogTripped(trippedOn);
+        } else {
+            logText(LVL_ERROR, QString("Watchdog could not close the bank: %1").arg(_errorText));
+        }
     }
 }
 

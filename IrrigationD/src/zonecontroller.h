@@ -51,8 +51,8 @@ public:
     /** @brief Opens @p zoneNumber for @p seconds, closing any open zone. @return True on success. */
     bool openZone(int zoneNumber, int seconds);
 
-    /** @brief Closes every zone. Callable from any component; always takes precedence. */
-    void allOff();
+    /** @brief Closes every zone. Callable from any component; always takes precedence. @return True when every line was driven inactive. */
+    bool allOff();
 
     /** @brief Returns the open zone number, or zero when none is open. */
     int openZoneNumber() const { return _openZone; }
@@ -68,6 +68,12 @@ public:
 
     /** @brief Runs the close path immediately. Test seam so sequences do not wait on wall time. */
     void expireCloseTimerForTest() { _closeTimer.stop(); onCloseTimer(); }
+
+    /** @brief Returns whether the close timer is currently armed. Test seam. */
+    bool closeTimerActiveForTest() const { return _closeTimer.isActive(); }
+
+    /** @brief Runs one watchdog check immediately. Test seam so failure-path tests do not race repeated ticks. */
+    void triggerWatchdogForTest() { onWatchdogTimer(); }
 
     /** @brief Returns the text of the most recent failure. */
     QString errorText() const { return _errorText; }
@@ -89,7 +95,8 @@ private slots:
 private:
     bool writeExclusive(int zoneNumber);
 
-    IGpioBackend* _backend = nullptr;
+    static constexpr int RetryIntervalMilliseconds = 1000;
+
     QMap<int, quint32> _zoneGpioMap;
     int _maxZoneSeconds = 3600;
     OutputBank* _bank = nullptr;

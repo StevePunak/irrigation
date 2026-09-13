@@ -20,6 +20,8 @@ private slots:
     void durationBelowOneIsRejected();
     void zoneClosesWhenItsTimerExpires();
     void watchdogClosesAZonePastItsDeadline();
+    void watchdogTripsOnWrongLineEnergised();
+    void watchdogDoesNotReportSuccessWhenCloseFails();
     void allOffClosesEverything();
     void unknownZoneNumberIsRejected();
 };
@@ -30,12 +32,17 @@ void TestZoneController::beginDrivesEveryLineInactive()
     QVERIFY(backend.openChipByLabel("mock"));
 
     ZoneController controller(&backend, eightZones(), true, 3600);
+    for(quint32 offset : eightZones().values()) {
+        backend.setLineValue(offset, Gpio::Value::Active);
+    }
+
     QVERIFY(controller.begin());
 
     QCOMPARE(controller.openZoneNumber(), 0);
     for(quint32 offset : eightZones().values()) {
         QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
+    QCOMPARE(backend.setValuesCallCount(), 1);
 }
 
 void TestZoneController::openingAZoneClosesTheOpenOneAtomically()
@@ -73,7 +80,7 @@ void TestZoneController::durationIsClampedToTheCeiling()
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(1).toInt(), 120);
-    QVERIFY(controller.secondsRemaining() <= 120);
+    QVERIFY(controller.secondsRemaining() >= 119 && controller.secondsRemaining() <= 120);
 }
 
 void TestZoneController::durationBelowOneIsRejected()
@@ -95,15 +102,18 @@ void TestZoneController::zoneClosesWhenItsTimerExpires()
     QVERIFY(backend.openChipByLabel("mock"));
 
     ZoneController controller(&backend, eightZones(), true, 3600);
+    controller.setWatchdogInterval(TimeSpan::fromSeconds(60));
     QVERIFY(controller.begin());
 
-    QSignalSpy spy(&controller, &ZoneController::zoneClosed);
-    QVERIFY(controller.openZone(1, 1));
+    QSignalSpy closedSpy(&controller, &ZoneController::zoneClosed);
+    QSignalSpy watchdogSpy(&controller, &ZoneController::watchdogTripped);
+    QVERIFY(controller.openZone(6, 2));
 
-    QVERIFY(spy.wait(3000));
-    QCOMPARE(spy.first().at(0).toInt(), 1);
+    QVERIFY(closedSpy.wait(4000));
+    QCOMPARE(closedSpy.first().at(0).toInt(), 6);
     QCOMPARE(controller.openZoneNumber(), 0);
-    QCOMPARE(backend.lineValue(5), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(20), Gpio::Value::Inactive);
+    QCOMPARE(watchdogSpy.count(), 0);
 }
 
 void TestZoneController::watchdogClosesAZonePastItsDeadline()
@@ -115,16 +125,56 @@ void TestZoneController::watchdogClosesAZonePastItsDeadline()
     controller.setWatchdogInterval(TimeSpan::fromMilliseconds(100));
     QVERIFY(controller.begin());
 
-    QVERIFY(controller.openZone(1, 1));
+    QVERIFY(controller.openZone(3, 2));
 
-    // Simulate the close timer never firing: stop it behind the controller's back
-    // and let the watchdog be the only thing that can save the zone.
     controller.disableCloseTimerForTest();
 
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
     QVERIFY(spy.wait(5000));
-    QCOMPARE(backend.lineValue(5), Gpio::Value::Inactive);
+    QCOMPARE(backend.lineValue(13), Gpio::Value::Inactive);
     QCOMPARE(controller.openZoneNumber(), 0);
+}
+
+void TestZoneController::watchdogTripsOnWrongLineEnergised()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    controller.setWatchdogInterval(TimeSpan::fromMilliseconds(100));
+    QVERIFY(controller.begin());
+
+    QVERIFY(controller.openZone(7, 600));
+
+    backend.setLineValue(21, Gpio::Value::Inactive);
+    backend.setLineValue(16, Gpio::Value::Active);
+
+    QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.first().at(0).toInt(), 7);
+    QCOMPARE(controller.openZoneNumber(), 0);
+}
+
+void TestZoneController::watchdogDoesNotReportSuccessWhenCloseFails()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+
+    QVERIFY(controller.openZone(8, 600));
+
+    backend.setLineValue(13, Gpio::Value::Active);
+    backend.setFailNextSetValues(true);
+
+    QSignalSpy trippedSpy(&controller, &ZoneController::watchdogTripped);
+    controller.triggerWatchdogForTest();
+
+    QCOMPARE(trippedSpy.count(), 0);
+    QCOMPARE(controller.openZoneNumber(), 8);
+    QCOMPARE(backend.lineValue(13), Gpio::Value::Active);
+    QCOMPARE(backend.lineValue(26), Gpio::Value::Active);
 }
 
 void TestZoneController::allOffClosesEverything()
@@ -136,9 +186,13 @@ void TestZoneController::allOffClosesEverything()
     QVERIFY(controller.begin());
     QVERIFY(controller.openZone(7, 600));
 
-    controller.allOff();
+    QSignalSpy spy(&controller, &ZoneController::zoneClosed);
+    QVERIFY(controller.allOff());
 
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toInt(), 7);
     QCOMPARE(controller.openZoneNumber(), 0);
+    QVERIFY(controller.closeTimerActiveForTest() == false);
     for(quint32 offset : eightZones().values()) {
         QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
