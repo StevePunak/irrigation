@@ -186,10 +186,17 @@ describe('NowScreen concurrent actions', () => {
     )
     await user.click(screen.getByRole('button', { name: /stop/i }))
 
-    pending.reject?.(new Error('zone run failed'))
     await waitFor(() => {
-      expect(screen.queryByRole('alert')).toBeNull()
+      expect(client.stopAll).toHaveBeenCalled()
     })
+
+    await act(async () => {
+      pending.reject?.(new Error('zone run failed'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 
