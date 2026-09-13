@@ -1,5 +1,8 @@
 #include <QTest>
 #include <QTemporaryDir>
+#include <QDir>
+#include <QFileInfo>
+#include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
 
@@ -14,6 +17,8 @@ private slots:
     void seedsEightZones();
     void reopenDoesNotRecreate();
     void firedInstantsRejectDuplicates();
+    void migratesForwardFromEarlierVersion();
+    void recreatesOnMigrationFailure();
 };
 
 void TestDataSource::createsSchemaOnFirstOpen()
@@ -94,6 +99,70 @@ void TestDataSource::firedInstantsRejectDuplicates()
                        "VALUES (1, 1, '2026-09-12T13:00:00Z', 'ran')"));
     QVERIFY(query.exec("INSERT INTO fired_instants (program_id, start_time_id, scheduled_at_utc, outcome) "
                        "VALUES (1, 1, '2026-09-12T13:00:00Z', 'ran')") == false);
+}
+
+void TestDataSource::migratesForwardFromEarlierVersion()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("irrigation.db");
+
+    {
+        QSqlDatabase seed = QSqlDatabase::addDatabase("QSQLITE", "seed-behind-connection");
+        seed.setDatabaseName(path);
+        QVERIFY(seed.open());
+        QSqlQuery query(seed);
+        QVERIFY(query.exec("CREATE TABLE info (id INTEGER PRIMARY KEY, sw_version TEXT NOT NULL)"));
+        QVERIFY(query.exec("INSERT INTO info (id, sw_version) VALUES (1, '0.9.0')"));
+        seed.close();
+    }
+    QSqlDatabase::removeDatabase("seed-behind-connection");
+
+    IrrigationDataSource source(path);
+    QVERIFY2(source.open(), qPrintable(source.errorText()));
+
+    QSqlQuery query(QSqlDatabase::database(source.connectionName()));
+    QVERIFY(query.exec("SELECT COUNT(*) FROM zones"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 8);
+
+    QVERIFY(query.exec("SELECT sw_version FROM info WHERE id = 1"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), source.compiledDatabaseVersion());
+}
+
+void TestDataSource::recreatesOnMigrationFailure()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("irrigation.db");
+
+    {
+        QSqlDatabase seed = QSqlDatabase::addDatabase("QSQLITE", "seed-failure-connection");
+        seed.setDatabaseName(path);
+        QVERIFY(seed.open());
+        QSqlQuery query(seed);
+        QVERIFY(query.exec("CREATE TABLE info (id INTEGER PRIMARY KEY, sw_version TEXT NOT NULL)"));
+        QVERIFY(query.exec("INSERT INTO info (id, sw_version) VALUES (1, '0.9.0')"));
+        QVERIFY(query.exec("CREATE TABLE zones (id INTEGER PRIMARY KEY)"));
+        seed.close();
+    }
+    QSqlDatabase::removeDatabase("seed-failure-connection");
+
+    IrrigationDataSource source(path);
+    QVERIFY2(source.open(), qPrintable(source.errorText()));
+
+    QFileInfo dbInfo(path);
+    QStringList backups = QDir(dbInfo.absolutePath())
+                               .entryList(QStringList() << dbInfo.fileName() + ".*.backup", QDir::Files);
+    QCOMPARE(backups.count(), 1);
+
+    QSqlQuery query(QSqlDatabase::database(source.connectionName()));
+    QVERIFY(query.exec("SELECT COUNT(*) FROM zones"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 8);
+
+    QVERIFY(query.exec("SELECT sw_version FROM info WHERE id = 1"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), source.compiledDatabaseVersion());
 }
 
 QTEST_MAIN(TestDataSource)

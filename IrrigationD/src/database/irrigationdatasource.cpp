@@ -148,8 +148,12 @@ bool IrrigationDataSource::recreateAndReopen(const QString& reason)
 
     closeConnection();
 
-    const QString backup = QString("%1.%2.backup")
-                               .arg(_path, QDateTime::currentDateTimeUtc().toString("yyyyMMddHHmmss"));
+    const QString timestamp = QDateTime::currentDateTimeUtc().toString("yyyyMMddHHmmsszzz");
+    QString backup = QString("%1.%2.backup").arg(_path, timestamp);
+    for(int suffix = 1; QFile::exists(backup); suffix++) {
+        backup = QString("%1.%2-%3.backup").arg(_path, timestamp).arg(suffix);
+    }
+
     if(QFile::rename(_path, backup) == false) {
         logText(LVL_ERROR, QString("Failed to move the database aside to %1").arg(backup));
         return false;
