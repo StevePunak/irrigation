@@ -38,3 +38,8 @@ irrigation_add_test(tst_repository
     ../src/model/programzone.cpp
     ../src/model/firedinstant.cpp
 )
+
+irrigation_add_test(tst_zonecontroller
+    tst_zonecontroller.cpp
+    ../src/zonecontroller.cpp
+)
