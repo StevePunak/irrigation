@@ -271,3 +271,22 @@ name the exact scenarios they drove; port them rather than starting cold.
   types it as a QStringList and `.toString()` returns empty, so the daemon
   requests zero lines and dies on a bare EINVAL. The daemon now tolerates both
   spellings; quote it anyway.
+
+## One more shared-tree trap, learned by tripping it while writing this file
+
+`git add <your path>` followed by a bare `git commit` is **not** safe in this
+tree. Three sessions share one working tree and therefore one INDEX. Committing
+takes the whole index, so anything a peer has already staged rides along with
+your commit — which is how commit `e41322d`, whose message is about this
+handoff, also contains W2's 365-line `docs/plans/BRIEF-w2-yocto-handoff.md`.
+
+**Use a pathspec-limited commit every time:**
+
+```
+git commit --only -- IrrigationD/src/foo.cpp IrrigationD/src/foo.h
+```
+
+That commits only the named paths regardless of what else sits staged. Carry
+this into every implementer dispatch; the existing "stage by explicit path,
+never `git add -A`" instruction is necessary and turned out not to be
+sufficient.
