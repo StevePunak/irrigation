@@ -15,6 +15,7 @@ qt_add_executable(${PROJ}
     src/irrigationsettings.h  src/irrigationsettings.cpp
     src/irrigationdaemon.h    src/irrigationdaemon.cpp
     src/zonecontroller.h      src/zonecontroller.cpp
+    src/stopbutton.h          src/stopbutton.cpp
     src/programrunner.h       src/programrunner.cpp
     src/iclock.h
     src/scheduler.h           src/scheduler.cpp
