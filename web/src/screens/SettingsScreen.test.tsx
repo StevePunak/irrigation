@@ -187,6 +187,32 @@ describe('SettingsScreen', () => {
     expect(putZone.mock.calls[0]![1]).toEqual({ name: 'Pots', enabled: false })
   })
 
+  it('shows no settings values when they could not be loaded', async () => {
+    vi.spyOn(client, 'getSettings').mockRejectedValue(new Error('controller unreachable'))
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/controller unreachable/i)
+    expect(screen.getByTestId('settings-unknown')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/master enable/i)).toBeNull()
+    expect(screen.queryByLabelText(/maximum zone runtime/i)).toBeNull()
+    expect(screen.queryByText(/no rain delay/i)).toBeNull()
+  })
+
+  it('refuses a ceiling that is not a whole number of minutes', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    const field = await screen.findByLabelText(/maximum zone runtime/i)
+    await user.clear(field)
+    await user.type(field, '1.25')
+    await user.click(screen.getByRole('button', { name: /save ceiling/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/whole minutes/i)
+    expect(putSettings).not.toHaveBeenCalled()
+  })
+
   it('reports a rejected write', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     vi.spyOn(client, 'putSettings').mockRejectedValue(new Error('database is locked'))

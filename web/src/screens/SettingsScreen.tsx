@@ -15,7 +15,7 @@ import type { ScreenProps } from './screenProps'
 const RAIN_DELAY_CHOICES = [1, 2, 3, 7]
 
 export default function SettingsScreen({ status, refresh }: ScreenProps) {
-  const [settings, setSettings] = useState<SettingsMap>({})
+  const [settings, setSettings] = useState<SettingsMap | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [names, setNames] = useState<Record<number, string>>({})
   const [ceilingMinutes, setCeilingMinutes] = useState(DEFAULT_MAX_ZONE_SECONDS / 60)
@@ -45,7 +45,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
       setError(null)
       try {
         await putSettings(patch)
-        setSettings((current) => ({ ...current, ...patch }))
+        setSettings((current) => (current === null ? current : { ...current, ...patch }))
         refresh()
       } catch (caught: unknown) {
         setError(caught instanceof Error ? caught.message : String(caught))
@@ -54,13 +54,13 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
     [refresh],
   )
 
-  const masterEnabled = parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])
-  const rainDelayUntil = parseInstant(settings[SETTING_KEYS.rainDelayUntil])
+  const masterEnabled = settings === null ? null : parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])
+  const rainDelayUntil = parseInstant(settings?.[SETTING_KEYS.rainDelayUntil])
   const controllerZone = status?.timezone ?? ''
 
   const onSaveCeiling = useCallback(() => {
-    if (ceilingMinutes < 1) {
-      setError('The maximum zone runtime must be at least one minute.')
+    if (Number.isInteger(ceilingMinutes) === false || ceilingMinutes < 1) {
+      setError('The maximum zone runtime must be at least one minute, in whole minutes.')
       return
     }
     void write({ [SETTING_KEYS.maxZoneSeconds]: String(ceilingMinutes * 60) })
@@ -89,64 +89,70 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
         </div>
       )}
 
-      <h2>Watering</h2>
+      {settings === null ? (
+        <p data-testid="settings-unknown">Settings are unknown until the controller answers.</p>
+      ) : (
+        <>
+          <h2>Watering</h2>
 
-      <label>
-        Master enable
-        <input
-          type="checkbox"
-          checked={masterEnabled}
-          onChange={(event) => {
-            void write({ [SETTING_KEYS.masterEnabled]: serializeMasterEnabled(event.target.checked) })
-          }}
-        />
-      </label>
+          <label>
+            Master enable
+            <input
+              type="checkbox"
+              checked={masterEnabled === true}
+              onChange={(event) => {
+                void write({ [SETTING_KEYS.masterEnabled]: serializeMasterEnabled(event.target.checked) })
+              }}
+            />
+          </label>
 
-      <label>
-        Maximum zone runtime (minutes)
-        <input
-          type="number"
-          min={1}
-          value={ceilingMinutes}
-          onChange={(event) => {
-            setCeilingMinutes(Number(event.target.value))
-          }}
-        />
-      </label>
-      <button type="button" onClick={onSaveCeiling}>
-        Save ceiling
-      </button>
-
-      <h2>Rain delay</h2>
-
-      <div data-testid="rain-delay-state">
-        {rainDelayUntil === null
-          ? 'No rain delay'
-          : `Watering paused until ${formatDayAndClock(rainDelayUntil, controllerZone)}`}
-      </div>
-
-      <div className="row">
-        {RAIN_DELAY_CHOICES.map((days) => (
-          <button
-            key={days}
-            type="button"
-            onClick={() => {
-              const until = new Date(Date.now() + days * 86400000).toISOString()
-              void write({ [SETTING_KEYS.rainDelayUntil]: until })
-            }}
-          >
-            {`Delay ${days} ${days === 1 ? 'day' : 'days'}`}
+          <label>
+            Maximum zone runtime (minutes)
+            <input
+              type="number"
+              min={1}
+              value={ceilingMinutes}
+              onChange={(event) => {
+                setCeilingMinutes(Number(event.target.value))
+              }}
+            />
+          </label>
+          <button type="button" onClick={onSaveCeiling}>
+            Save ceiling
           </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => {
-            void write({ [SETTING_KEYS.rainDelayUntil]: '' })
-          }}
-        >
-          Clear rain delay
-        </button>
-      </div>
+
+          <h2>Rain delay</h2>
+
+          <div data-testid="rain-delay-state">
+            {rainDelayUntil === null
+              ? 'No rain delay'
+              : `Watering paused until ${formatDayAndClock(rainDelayUntil, controllerZone)}`}
+          </div>
+
+          <div className="row">
+            {RAIN_DELAY_CHOICES.map((days) => (
+              <button
+                key={days}
+                type="button"
+                onClick={() => {
+                  const until = new Date(Date.now() + days * 86400000).toISOString()
+                  void write({ [SETTING_KEYS.rainDelayUntil]: until })
+                }}
+              >
+                {`Delay ${days} ${days === 1 ? 'day' : 'days'}`}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                void write({ [SETTING_KEYS.rainDelayUntil]: '' })
+              }}
+            >
+              Clear rain delay
+            </button>
+          </div>
+        </>
+      )}
 
       <h2>Zone names</h2>
 
