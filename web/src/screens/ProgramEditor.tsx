@@ -87,6 +87,12 @@ export default function ProgramEditor({
   }, [])
 
   const onSave = useCallback(async () => {
+    const unparsed = startTimeText.findIndex((text) => inputValueToMinutes(text) < 0)
+    if (unparsed >= 0) {
+      setError(`Start time ${unparsed + 1} needs a valid time.`)
+      return
+    }
+    // Sequence numbers in `draft.zones` are stale between edits; onSave is what makes them match array order.
     const normalised: ProgramDraft = { ...draft, name: draft.name.trim(), zones: resequence(draft.zones) }
     const invalid = validationError(normalised)
     if (invalid !== null) {
@@ -107,7 +113,7 @@ export default function ProgramEditor({
     } finally {
       setSaving(false)
     }
-  }, [draft, program, onDone])
+  }, [draft, startTimeText, program, onDone])
 
   const onDelete = useCallback(async () => {
     if (program === null) {

@@ -295,6 +295,48 @@ describe('editing a program', () => {
   })
 })
 
+describe('blank start times', () => {
+  it('refuses to save while a start time is blank', async () => {
+    const user = userEvent.setup()
+    const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    renderEditor(morningProgram)
+    await user.clear(screen.getByLabelText(/start time 1/i))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/start time 1 needs a valid time/i)
+    expect(updateProgram).not.toHaveBeenCalled()
+  })
+
+  it('names the row that is blank when several start times exist', async () => {
+    const user = userEvent.setup()
+    const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    renderEditor(morningProgram)
+    await user.click(screen.getByRole('button', { name: /add start time/i }))
+    await user.clear(screen.getByLabelText(/start time 2/i))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/start time 2 needs a valid time/i)
+    expect(updateProgram).not.toHaveBeenCalled()
+  })
+
+  it('saves once the blank start time is filled back in', async () => {
+    const user = userEvent.setup()
+    const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    renderEditor(morningProgram)
+    await user.clear(screen.getByLabelText(/start time 1/i))
+    await user.type(screen.getByLabelText(/start time 1/i), '07:30')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(updateProgram).toHaveBeenCalledTimes(1)
+    })
+    expect(updateProgram.mock.calls[0]![1].startTimes[0]!.minutesAfterMidnight).toBe(450)
+  })
+})
+
 describe('deleting a program', () => {
   it('asks first and then deletes', async () => {
     const user = userEvent.setup()
