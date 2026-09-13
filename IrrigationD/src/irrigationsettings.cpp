@@ -1,5 +1,7 @@
 #include "irrigationsettings.h"
 
+#include <Kanoop/log.h>
+
 const QString IrrigationSettings::KEY_ZONES              = "gpio/zones";
 const QString IrrigationSettings::KEY_CHIP_LABEL         = "gpio/chipLabel";
 const QString IrrigationSettings::KEY_ZONE_ACTIVE_LOW    = "gpio/zoneActiveLow";
@@ -22,9 +24,11 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
     // QSettings returns a QStringList for an unquoted comma-separated value.
     QString raw = value.typeId() == QMetaType::QStringList ? value.toStringList().join(',') : value.toString();
     const QStringList pairs = raw.split(',', Qt::SkipEmptyParts);
+    int parsedCount = 0;
     for(const QString& pair : pairs) {
         QStringList parts = pair.split('=');
         if(parts.count() != 2) {
+            Log::logText(LVL_WARNING, QString("Skipping malformed zone entry \"%1\": expected zone=offset").arg(pair));
             continue;
         }
 
@@ -33,10 +37,16 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
         int zone = parts.at(0).trimmed().toInt(&zoneOk);
         quint32 offset = parts.at(1).trimmed().toUInt(&offsetOk);
         if(zoneOk == false || offsetOk == false) {
+            Log::logText(LVL_WARNING, QString("Skipping malformed zone entry \"%1\": zone or offset is not numeric").arg(pair));
             continue;
         }
 
         result.insert(zone, offset);
+        ++parsedCount;
+    }
+
+    if(parsedCount != pairs.count()) {
+        Log::logText(LVL_WARNING, QString("Parsed %1 of %2 zone entries").arg(parsedCount).arg(pairs.count()));
     }
 
     return result;
