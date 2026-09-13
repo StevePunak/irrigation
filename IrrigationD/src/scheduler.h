@@ -61,6 +61,9 @@ private:
     /** @brief Returns a best-effort UTC instant for a start time that failed to resolve, for the Missed audit row. */
     static QDateTime missedInstantFor(const ProgramStartTime& startTime, const QDate& localDate);
 
+    /** @brief Returns whether @p minutesAfterMidnight is a legal wall-clock offset (0..1439). */
+    static bool isValidMinutesAfterMidnight(int minutesAfterMidnight);
+
     static constexpr qint64 GraceWindowSeconds = 120;
 
     IrrigationDataSource* _source = nullptr;

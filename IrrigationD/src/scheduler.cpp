@@ -56,7 +56,7 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime, const QDate
         *valid = false;
     }
 
-    if(startTime.minutesAfterMidnight < 0 || startTime.minutesAfterMidnight >= 24 * 60) {
+    if(isValidMinutesAfterMidnight(startTime.minutesAfterMidnight) == false) {
         return QDateTime();
     }
 
@@ -87,6 +87,10 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime, const QDate
 
 QDateTime Scheduler::missedInstantFor(const ProgramStartTime& startTime, const QDate& localDate)
 {
+    if(isValidMinutesAfterMidnight(startTime.minutesAfterMidnight) == false) {
+        return QDateTime();
+    }
+
     const QTime localTime = QTime(0, 0).addSecs(startTime.minutesAfterMidnight * 60);
 
     QTimeZone zone(startTime.timezone.toUtf8());
@@ -98,6 +102,11 @@ QDateTime Scheduler::missedInstantFor(const ProgramStartTime& startTime, const Q
     }
 
     return QDateTime(localDate, localTime, QTimeZone::UTC);
+}
+
+bool Scheduler::isValidMinutesAfterMidnight(int minutesAfterMidnight)
+{
+    return minutesAfterMidnight >= 0 && minutesAfterMidnight < 24 * 60;
 }
 
 void Scheduler::tick()
@@ -120,7 +129,7 @@ void Scheduler::tick()
             const QDate today = zone.isValid() ? nowUtc.toTimeZone(zone).date() : nowUtc.date();
 
             // Yesterday's local date is included: a late-night start time can still be
-            // inside the grace window after the UTC day has rolled over.
+            // inside the grace window shortly after local midnight has passed.
             const QDate candidateDates[] = { today.addDays(-1), today };
             for(const QDate& localDate : candidateDates) {
                 if(isWateringDay(program, localDate) == false) {
@@ -132,6 +141,9 @@ void Scheduler::tick()
 
                 if(valid == false) {
                     const QDateTime missedInstant = missedInstantFor(startTime, localDate);
+                    if(missedInstant.isValid() == false) {
+                        continue;
+                    }
                     if(_source->hasFired(program.id, startTime.id, missedInstant)) {
                         continue;
                     }
