@@ -165,6 +165,32 @@ describe('ProgramsScreen', () => {
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
     expect(await screen.findByText(/no programs yet/i)).toBeInTheDocument()
   })
+
+  it('opens the editor on a new program and returns to the list', async () => {
+    const user = userEvent.setup()
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await screen.findByTestId('program-1')
+
+    await user.click(screen.getByRole('button', { name: /new program/i }))
+    expect(await screen.findByRole('heading', { name: /new program/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(await screen.findByTestId('program-1')).toBeInTheDocument()
+  })
+
+  it('reloads the list after the editor saves', async () => {
+    const user = userEvent.setup()
+    const getPrograms = vi.spyOn(client, 'getPrograms').mockResolvedValue([morningProgram])
+    vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
+
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('button', { name: /^edit$/i }))
+    await user.click(await screen.findByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(getPrograms).toHaveBeenCalledTimes(2)
+    })
+  })
 })
 
 describe('ProgramsScreen with no status', () => {

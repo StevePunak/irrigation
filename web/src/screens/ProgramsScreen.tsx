@@ -3,12 +3,14 @@ import { getPrograms, getZones, runProgram, updateProgram } from '../api/client'
 import type { Program, Zone } from '../api/types'
 import { dayRuleSummary, toDraft, totalRuntimeSeconds } from '../programs/dayRule'
 import { formatDayAndClock, formatDuration, minutesToClock } from '../time/zonedformat'
+import ProgramEditor from './ProgramEditor'
 import type { ScreenProps } from './screenProps'
 
 export default function ProgramsScreen({ status }: ScreenProps) {
   const [programs, setPrograms] = useState<Program[] | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<Program | null | undefined>(undefined)
 
   const load = useCallback(async () => {
     try {
@@ -56,9 +58,35 @@ export default function ProgramsScreen({ status }: ScreenProps) {
 
   const controllerZone = status?.timezone ?? ''
 
+  if (editing !== undefined) {
+    return (
+      <ProgramEditor
+        program={editing}
+        zones={zones}
+        controllerZone={controllerZone}
+        onDone={() => {
+          setEditing(undefined)
+          void load()
+        }}
+        onCancel={() => {
+          setEditing(undefined)
+        }}
+      />
+    )
+  }
+
   return (
     <section className="screen">
       <h1>Programs</h1>
+
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(null)
+        }}
+      >
+        New program
+      </button>
 
       {error === null ? null : (
         <div className="alert" role="alert">
@@ -120,6 +148,14 @@ export default function ProgramsScreen({ status }: ScreenProps) {
             }}
           >
             Run now
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(program)
+            }}
+          >
+            Edit
           </button>
         </article>
       ))}

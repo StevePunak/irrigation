@@ -183,3 +183,48 @@ button, input, select {
 .program [role='switch'][aria-checked='false'] {
   color: var(--ink-dim);
 }
+
+.editor label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.editor input[type='text'],
+.editor input[type='time'],
+.editor input[type='date'],
+.editor input[type='number'] {
+  flex: 1;
+  max-width: 220px;
+}
+
+.weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.weekdays button[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.row__zone {
+  font-size: 0.8rem;
+  color: var(--ink-dim);
+}
+
+.destructive {
+  background: var(--danger);
+  color: var(--danger-ink);
+  border-color: var(--danger);
+}
