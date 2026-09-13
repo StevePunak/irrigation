@@ -1,0 +1,142 @@
+// @vitest-environment node
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import { checkBundleDir, scanForExternalOrigins } from './checkBundle.mjs'
+
+function bundle(files) {
+  const dir = mkdtempSync(join(tmpdir(), 'irrigation-bundle-'))
+  for (const [name, content] of Object.entries(files)) {
+    const path = join(dir, name)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, content)
+  }
+  return dir
+}
+
+describe('scanForExternalOrigins', () => {
+  it('finds a stylesheet on a remote host', () => {
+    const found = scanForExternalOrigins(
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">',
+    )
+    expect(found).toContain('https://fonts.googleapis.com')
+  })
+
+  it('finds a script on a remote host', () => {
+    expect(scanForExternalOrigins('<script src="http://cdn.example.com/react.js"></script>')).toContain(
+      'http://cdn.example.com',
+    )
+  })
+
+  it('finds a protocol-relative url', () => {
+    expect(scanForExternalOrigins('<img src="//images.example.com/logo.png">')).toContain(
+      '//images.example.com',
+    )
+  })
+
+  it('finds a remote origin inside bundled javascript', () => {
+    expect(scanForExternalOrigins('fetch("https://api.weather.example.com/v1")')).toContain(
+      'https://api.weather.example.com',
+    )
+  })
+
+  it('allows the XML namespace urls that svg markup carries', () => {
+    expect(
+      scanForExternalOrigins('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>'),
+    ).toEqual([])
+    expect(scanForExternalOrigins('<html xmlns="http://www.w3.org/1999/xhtml">')).toEqual([])
+  })
+
+  it('allows the error-reference links React embeds in its production build', () => {
+    expect(scanForExternalOrigins('Error("Minified React error #"+e+"; visit https://react.dev/errors/"+e)')).toEqual([])
+  })
+
+  it('reports any other path on a host with an allowed prefix', () => {
+    expect(scanForExternalOrigins('fetch("https://react.dev/api/telemetry")')).toContain('https://react.dev')
+  })
+
+  it('reports a host whose name only begins with an allowed one', () => {
+    expect(scanForExternalOrigins('<script src="http://www.w3.org.example.com/x.js"></script>')).toContain(
+      'http://www.w3.org.example.com',
+    )
+  })
+
+  it('allows root-relative and same-origin urls', () => {
+    expect(
+      scanForExternalOrigins('<script type="module" src="/assets/index-abc123.js"></script>'),
+    ).toEqual([])
+    expect(scanForExternalOrigins('fetch("/api/status")')).toEqual([])
+  })
+})
+
+describe('checkBundleDir', () => {
+  it('passes a clean bundle', () => {
+    const dir = bundle({
+      'index.html': '<!doctype html><script type="module" src="/assets/app.js"></script>',
+      'assets/app.js': 'fetch("/api/status")',
+      'assets/app.css': 'body { font-family: system-ui; }',
+    })
+    expect(checkBundleDir(dir)).toEqual([])
+  })
+
+  it('reports a missing directory', () => {
+    expect(checkBundleDir(join(tmpdir(), 'irrigation-bundle-does-not-exist'))).toEqual([
+      expect.stringMatching(/does not exist/i),
+    ])
+  })
+
+  it('reports a directory with no index.html', () => {
+    const dir = bundle({ 'assets/app.js': 'fetch("/api/status")' })
+    expect(checkBundleDir(dir)).toEqual([expect.stringMatching(/index\.html/i)])
+  })
+
+  it('reports an external origin in the entry document', () => {
+    const dir = bundle({
+      'index.html': '<link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">',
+    })
+    expect(checkBundleDir(dir).join('\n')).toMatch(/fonts\.googleapis\.com/)
+  })
+
+  it('reports an external origin in an emitted asset', () => {
+    const dir = bundle({
+      'index.html': '<!doctype html><script src="/assets/app.js"></script>',
+      'assets/app.js': 'new Image().src = "https://tracker.example.com/pixel.gif"',
+    })
+    expect(checkBundleDir(dir).join('\n')).toMatch(/tracker\.example\.com/)
+  })
+
+  it('ignores source maps', () => {
+    const dir = bundle({
+      'index.html': '<!doctype html><script src="/assets/app.js"></script>',
+      'assets/app.js': '//# sourceMappingURL=app.js.map',
+      'assets/app.js.map': '{"sources":["https://internal.example.com/src/app.ts"]}',
+    })
+    expect(checkBundleDir(dir)).toEqual([])
+  })
+})
+
+describe('the build-step command', () => {
+  function copyCommand() {
+    const dir = mkdtempSync(join(tmpdir(), 'irrigation bundle command '))
+    for (const name of ['checkBundle.mjs', 'checkBundleCli.mjs']) {
+      copyFileSync(fileURLToPath(new URL(name, import.meta.url)), join(dir, name))
+    }
+    return join(dir, 'checkBundleCli.mjs')
+  }
+
+  it('exits non-zero naming the origin, even from a path containing spaces', () => {
+    const dir = bundle({ 'index.html': '<link href="https://fonts.googleapis.com/css2" rel="stylesheet">' })
+    const result = spawnSync(process.execPath, [copyCommand(), dir], { encoding: 'utf8' })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toMatch(/fonts\.googleapis\.com/)
+  })
+
+  it('exits zero on a clean bundle', () => {
+    const dir = bundle({ 'index.html': '<!doctype html><script type="module" src="/assets/app.js"></script>' })
+    const result = spawnSync(process.execPath, [copyCommand(), dir], { encoding: 'utf8' })
+    expect(result.status).toBe(0)
+  })
+})

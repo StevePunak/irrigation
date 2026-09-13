@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/checkBundle.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/checkBundleCli.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "TZ=UTC vitest run && npm run test:wallclock",
