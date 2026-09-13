@@ -127,6 +127,35 @@ describe('useStatus', () => {
     expect(result.current.error).toMatch(/Failed to fetch/)
   })
 
+  it('backs off to the idle interval after a failed poll, even mid-run', async () => {
+    const getStatus = vi
+      .spyOn(client, 'getStatus')
+      .mockResolvedValueOnce(runningStatus)
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(runningStatus)
+
+    renderHook(() => useStatus())
+    await settle()
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    // The running poll schedules the next at 2 s; that one rejects.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    // After the failure the cadence must relax to 15 s, so 2 s buys nothing.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+  })
+
   it('clears the error on the next success', async () => {
     vi.spyOn(client, 'getStatus')
       .mockRejectedValueOnce(new Error('Failed to fetch'))

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 
 /**
  * Ticks `seconds` down locally between polls. `epoch` identifies the poll the
- * value came from; a change resets the count. Keying the reset on `seconds`
- * instead stalls the display whenever two polls report the same value.
+ * value came from. A change to `epoch` resets the count. A repeated `seconds`
+ * value alone does not.
  */
 export function useCountdown(seconds: number, epoch: number): number {
   const [remaining, setRemaining] = useState(seconds)

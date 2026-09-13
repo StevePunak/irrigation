@@ -54,6 +54,20 @@ describe('useCountdown', () => {
     expect(result.current).toBe(116)
   })
 
+  it('resets when a new epoch repeats the previous seconds value', () => {
+    const { result, rerender } = renderHook(({ seconds, epoch }) => useCountdown(seconds, epoch), {
+      initialProps: { seconds: 120, epoch: 1 },
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(4000)
+    })
+    expect(result.current).toBe(116)
+
+    rerender({ seconds: 120, epoch: 2 })
+    expect(result.current).toBe(120)
+  })
+
   it('floors at zero', () => {
     const { result } = renderHook(() => useCountdown(2, 1))
 
