@@ -19,6 +19,9 @@ qt_add_executable(${PROJ}
     src/programrunner.h       src/programrunner.cpp
     src/iclock.h
     src/scheduler.h           src/scheduler.cpp
+    src/irrigationcontrolserver.h  src/irrigationcontrolserver.cpp
+    src/json/statusjson.h     src/json/statusjson.cpp
+    src/json/programjson.h    src/json/programjson.cpp
     src/database/irrigationdatasource.h  src/database/irrigationdatasource.cpp
     src/database/irrigation.qrc
     src/model/zone.h              src/model/zone.cpp
