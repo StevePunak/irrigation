@@ -2962,18 +2962,12 @@ export default function StopButton({ onStop, busy }: StopButtonProps) {
 ```tsx
 import { useCallback, useEffect, useState } from 'react'
 import { getZones, runZone, stopAll } from '../api/client'
-import type { Status, Zone } from '../api/types'
+import type { Zone } from '../api/types'
 import StopButton from '../components/StopButton'
 import ZoneTile from '../components/ZoneTile'
 import { useCountdown } from '../hooks/useCountdown'
 import { formatCountdown, formatDayAndClock, formatDuration } from '../time/zonedformat'
-
-export interface ScreenProps {
-  status: Status | null
-  /** Identifies the poll `status` came from; the countdown resets when it changes. */
-  polls: number
-  refresh: () => void
-}
+import type { ScreenProps } from './screenProps'
 
 export const QUICK_RUN_CHOICES = [60, 300, 600, 900, 1200, 1800]
 const DEFAULT_QUICK_RUN = 600
@@ -3109,7 +3103,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
 `StopButton` receives `busy` for its `aria-busy` attribute and never for `disabled`.
 
-`ProgramsScreen` and `SettingsScreen` import `ScreenProps` from this file.
+`ProgramsScreen` and `SettingsScreen` import `ScreenProps` from `./screenProps`, which Task 5 created.
 
 - [ ] **Step 5: Add the styles**
 
@@ -3654,7 +3648,7 @@ import { getPrograms, getZones, runProgram, updateProgram } from '../api/client'
 import type { Program, Zone } from '../api/types'
 import { dayRuleSummary, toDraft, totalRuntimeSeconds } from '../programs/dayRule'
 import { formatDayAndClock, formatDuration, minutesToClock } from '../time/zonedformat'
-import type { ScreenProps } from './NowScreen'
+import type { ScreenProps } from './screenProps'
 
 export default function ProgramsScreen({ status }: ScreenProps) {
   const [programs, setPrograms] = useState<Program[] | null>(null)
@@ -5134,7 +5128,7 @@ import {
   serializeBoolean,
 } from '../settings/settingsMap'
 import { formatDayAndClock } from '../time/zonedformat'
-import type { ScreenProps } from './NowScreen'
+import type { ScreenProps } from './screenProps'
 
 const RAIN_DELAY_CHOICES = [1, 2, 3, 7]
 
