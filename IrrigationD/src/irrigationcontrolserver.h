@@ -10,6 +10,7 @@
 #include <Kanoop/timespan.h>
 #include <Kanoop/utility/abstractthreadclass.h>
 
+#include <QAtomicInt>
 #include <QDateTime>
 #include <QHttpServer>
 #include <QHttpServerRequest>
@@ -100,8 +101,7 @@ protected:
     virtual void threadAboutToFinish() override;
 
 private:
-    // updateStatus() (called from the daemon's thread) lands here through this queued
-    // connection, so it never races a route handler's read of _status on the worker thread.
+    // A direct _status = status write here would race a route handler's read of it.
     Q_SIGNAL void statusUpdateRequested(const ServerStatus& status);
     Q_SLOT void onStatusUpdateRequested(const ServerStatus& status);
 
@@ -125,6 +125,16 @@ private:
     /** @brief Returns the earliest future UTC instant at which @p program is next due, or an invalid QDateTime when none is scheduled. */
     static QDateTime nextRunUtcFor(const Program& program, const ProgramStartTimeList& startTimes, const QDateTime& nowUtc);
 
+    /** @brief Returns whether every zone.zoneId in @p zones names a row present in @p knownZones. */
+    static bool zoneIdsAreKnown(const ProgramZoneList& zones, const ZoneList& knownZones);
+
+    /** @brief Returns whether @p value is a legal value for the settings key @p key. */
+    static bool isValidSettingValue(const QString& key, const QString& value);
+
+    bool beginTransaction();
+    bool commitTransaction();
+    void rollbackTransaction();
+
     static const QStringList SettingsKeys;
     static constexpr int HorizonDays = 366;
 
@@ -135,7 +145,7 @@ private:
     QHttpServer* _httpServer = nullptr;
     QTcpServer* _tcpServer = nullptr;
     int _boundPort = 0;
-    bool _ready = false;
+    QAtomicInt _ready;
     MutexEvent _readyEvent;
     ServerStatus _status;
 };

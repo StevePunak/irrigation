@@ -1,7 +1,10 @@
 #include "json/programjson.h"
 
+#include "scheduler.h"
+
 #include <QJsonArray>
 #include <QJsonValue>
+#include <QTimeZone>
 
 const QStringList ProgramJson::ValidDayModeNames = { "DaysOfWeek", "Odd", "Even", "EveryNDays" };
 
@@ -150,13 +153,19 @@ bool ProgramJson::startTimeFromJson(const QJsonObject& object, ProgramStartTime&
     }
 
     const int minutesAfterMidnight = object.value("minutesAfterMidnight").toInt();
-    if(isValidMinutesAfterMidnight(minutesAfterMidnight) == false) {
+    if(Scheduler::isValidMinutesAfterMidnight(minutesAfterMidnight) == false) {
         errorMessage = QString("minutesAfterMidnight %1 is out of range").arg(minutesAfterMidnight);
         return false;
     }
 
+    const QString timezone = object.value("timezone").toString();
+    if(QTimeZone(timezone.toUtf8()).isValid() == false) {
+        errorMessage = QString("unknown timezone '%1'").arg(timezone);
+        return false;
+    }
+
     startTime.minutesAfterMidnight = minutesAfterMidnight;
-    startTime.timezone = object.value("timezone").toString();
+    startTime.timezone = timezone;
     return true;
 }
 
@@ -177,20 +186,21 @@ bool ProgramJson::zoneFromJson(const QJsonObject& object, ProgramZone& zone, QSt
         return false;
     }
 
+    const int durationSeconds = object.value("durationSeconds").toInt();
+    if(durationSeconds < 1) {
+        errorMessage = "durationSeconds must be positive";
+        return false;
+    }
+
     zone.zoneId = object.value("zoneId").toInt();
     zone.sequence = object.value("sequence").toInt();
-    zone.durationSeconds = object.value("durationSeconds").toInt();
+    zone.durationSeconds = durationSeconds;
     return true;
 }
 
 bool ProgramJson::isValidDayModeName(const QString& name)
 {
     return ValidDayModeNames.contains(name);
-}
-
-bool ProgramJson::isValidMinutesAfterMidnight(int minutesAfterMidnight)
-{
-    return minutesAfterMidnight >= 0 && minutesAfterMidnight < 24 * 60;
 }
 
 QString ProgramJson::instantToJson(const QDateTime& value)

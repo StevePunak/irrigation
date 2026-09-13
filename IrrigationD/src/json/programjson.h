@@ -46,7 +46,6 @@ private:
     static bool zoneFromJson(const QJsonObject& object, ProgramZone& zone, QString& errorMessage);
 
     static bool isValidDayModeName(const QString& name);
-    static bool isValidMinutesAfterMidnight(int minutesAfterMidnight);
 
     static QString instantToJson(const QDateTime& value);
     static QString dateToJson(const QDate& value);

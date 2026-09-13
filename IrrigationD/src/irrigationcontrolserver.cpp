@@ -5,6 +5,8 @@
 #include "json/statusjson.h"
 #include "scheduler.h"
 
+#include <Kanoop/loggingtypes.h>
+
 #include <QCoreApplication>
 #include <QHostAddress>
 #include <QHttpServerResponder>
@@ -25,7 +27,7 @@ const QStringList IrrigationControlServer::SettingsKeys = {
 IrrigationControlServer::IrrigationControlServer(const QString& databasePath) :
     AbstractThreadClass("control-server"),
     _databasePath(databasePath),
-    _bindAddress("0.0.0.0"),
+    _bindAddress("127.0.0.1"),
     _listenPort(8080)
 {
     IrrigationControlServer::setObjectName(IrrigationControlServer::metaObject()->className());
@@ -46,6 +48,9 @@ void IrrigationControlServer::abort()
 
 bool IrrigationControlServer::waitUntilReady(const TimeSpan& timeout)
 {
+    if(_ready.loadAcquire() != 0) {
+        return true;
+    }
     return _readyEvent.wait(timeout);
 }
 
@@ -166,7 +171,7 @@ void IrrigationControlServer::threadStarted()
     }
 
     _boundPort = _tcpServer->serverPort();
-    _ready = true;
+    _ready.storeRelease(1);
     _readyEvent.set();
 }
 
@@ -183,7 +188,8 @@ void IrrigationControlServer::threadAboutToFinish()
     delete _source;
     _source = nullptr;
 
-    _ready = false;
+    _ready.storeRelease(0);
+    _readyEvent.clear();
 }
 
 QHttpServerResponse IrrigationControlServer::handleHealth(const QHttpServerRequest& request)
@@ -355,6 +361,52 @@ QHttpServerResponse IrrigationControlServer::handleProgramsGet(const QHttpServer
     return QHttpServerResponse(array, QHttpServerResponder::StatusCode::Ok);
 }
 
+bool IrrigationControlServer::zoneIdsAreKnown(const ProgramZoneList& zones, const ZoneList& knownZones)
+{
+    for(const ProgramZone& zone : zones) {
+        bool found = false;
+        for(const Zone& candidate : knownZones) {
+            if(candidate.id == zone.zoneId) {
+                found = true;
+                break;
+            }
+        }
+        if(found == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IrrigationControlServer::beginTransaction()
+{
+    bool ok = false;
+    _source->rawQuery("BEGIN", &ok);
+    if(ok == false) {
+        logText(LVL_ERROR, "Failed to begin a database transaction");
+    }
+    return ok;
+}
+
+bool IrrigationControlServer::commitTransaction()
+{
+    bool ok = false;
+    _source->rawQuery("COMMIT", &ok);
+    if(ok == false) {
+        logText(LVL_ERROR, "Failed to commit a database transaction");
+    }
+    return ok;
+}
+
+void IrrigationControlServer::rollbackTransaction()
+{
+    bool ok = false;
+    _source->rawQuery("ROLLBACK", &ok);
+    if(ok == false) {
+        logText(LVL_ERROR, "Failed to roll back a database transaction");
+    }
+}
+
 QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServerRequest& request)
 {
     QJsonParseError error;
@@ -373,19 +425,38 @@ QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServer
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 
-    if(_source->insertProgram(program) == false) {
+    if(zoneIdsAreKnown(zones, _source->allZones()) == false) {
+        return QHttpServerResponse(QJsonObject{{"error", "unknown zoneId in zones"}},
+                                   QHttpServerResponder::StatusCode::BadRequest);
+    }
+
+    if(beginTransaction() == false) {
         return QHttpServerResponse(QJsonObject{{"error", "failed to create program"}},
                                    QHttpServerResponder::StatusCode::InternalServerError);
     }
 
+    bool ok = _source->insertProgram(program);
+
     for(ProgramStartTime& startTime : startTimes) {
+        if(ok == false) {
+            break;
+        }
         startTime.programId = program.id;
-        _source->insertStartTime(startTime);
+        ok = _source->insertStartTime(startTime);
     }
 
     for(ProgramZone& zone : zones) {
+        if(ok == false) {
+            break;
+        }
         zone.programId = program.id;
-        _source->insertProgramZone(zone);
+        ok = _source->insertProgramZone(zone);
+    }
+
+    if(ok == false || commitTransaction() == false) {
+        rollbackTransaction();
+        return QHttpServerResponse(QJsonObject{{"error", "failed to create program"}},
+                                   QHttpServerResponder::StatusCode::InternalServerError);
     }
 
     const QDateTime nextRunUtc = nextRunUtcFor(program, startTimes, QDateTime::currentDateTimeUtc());
@@ -425,31 +496,48 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 
+    if(zoneIdsAreKnown(zones, _source->allZones()) == false) {
+        return QHttpServerResponse(QJsonObject{{"error", "unknown zoneId in zones"}},
+                                   QHttpServerResponder::StatusCode::BadRequest);
+    }
+
     program.id = programId;
-    if(_source->updateProgram(program) == false) {
+
+    if(beginTransaction() == false) {
         return QHttpServerResponse(QJsonObject{{"error", "failed to update program"}},
                                    QHttpServerResponder::StatusCode::InternalServerError);
     }
 
-    bool ok = false;
-    _source->rawQuery(QString("DELETE FROM program_start_times WHERE program_id = %1").arg(programId), &ok);
-    if(ok == false) {
-        logText(LVL_WARNING, QString("Failed to clear start times for program %1").arg(programId));
+    bool ok = _source->updateProgram(program);
+
+    if(ok) {
+        _source->rawQuery(QString("DELETE FROM program_start_times WHERE program_id = %1").arg(programId), &ok);
     }
 
-    _source->rawQuery(QString("DELETE FROM program_zones WHERE program_id = %1").arg(programId), &ok);
-    if(ok == false) {
-        logText(LVL_WARNING, QString("Failed to clear zones for program %1").arg(programId));
+    if(ok) {
+        _source->rawQuery(QString("DELETE FROM program_zones WHERE program_id = %1").arg(programId), &ok);
     }
 
     for(ProgramStartTime& startTime : startTimes) {
+        if(ok == false) {
+            break;
+        }
         startTime.programId = programId;
-        _source->insertStartTime(startTime);
+        ok = _source->insertStartTime(startTime);
     }
 
     for(ProgramZone& zone : zones) {
+        if(ok == false) {
+            break;
+        }
         zone.programId = programId;
-        _source->insertProgramZone(zone);
+        ok = _source->insertProgramZone(zone);
+    }
+
+    if(ok == false || commitTransaction() == false) {
+        rollbackTransaction();
+        return QHttpServerResponse(QJsonObject{{"error", "failed to update program"}},
+                                   QHttpServerResponder::StatusCode::InternalServerError);
     }
 
     const QDateTime nextRunUtc = nextRunUtcFor(program, startTimes, QDateTime::currentDateTimeUtc());
@@ -523,6 +611,34 @@ QHttpServerResponse IrrigationControlServer::handleSettingsGet(const QHttpServer
     return QHttpServerResponse(object, QHttpServerResponder::StatusCode::Ok);
 }
 
+bool IrrigationControlServer::isValidSettingValue(const QString& key, const QString& value)
+{
+    if(key == "master_enabled") {
+        return value == "0" || value == "1";
+    }
+
+    if(key == "rain_delay_until") {
+        return value.isEmpty() || QDateTime::fromString(value, Qt::ISODate).isValid();
+    }
+
+    if(key == "max_zone_seconds") {
+        bool ok = false;
+        const int seconds = value.toInt(&ok);
+        return ok && seconds > 0;
+    }
+
+    if(key == "log_level") {
+        for(Log::LogLevel level : Log::getLogLevels()) {
+            if(QString::compare(Log::getLogLevelString(level), value, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    return false;
+}
+
 QHttpServerResponse IrrigationControlServer::handleSettingsPut(const QHttpServerRequest& request)
 {
     QJsonParseError error;
@@ -534,11 +650,21 @@ QHttpServerResponse IrrigationControlServer::handleSettingsPut(const QHttpServer
 
     const QJsonObject body = document.object();
     for(auto it = body.constBegin(); it != body.constEnd(); ++it) {
-        if(it.value().isString() == false) {
-            return QHttpServerResponse(QJsonObject{{"error", "setting values must be strings"}},
+        if(SettingsKeys.contains(it.key()) == false) {
+            return QHttpServerResponse(QJsonObject{{"error", QString("unknown setting '%1'").arg(it.key())}},
                                        QHttpServerResponder::StatusCode::BadRequest);
         }
-        _source->setSettingValue(it.key(), it.value().toString());
+        if(it.value().isString() == false || isValidSettingValue(it.key(), it.value().toString()) == false) {
+            return QHttpServerResponse(QJsonObject{{"error", QString("invalid value for '%1'").arg(it.key())}},
+                                       QHttpServerResponder::StatusCode::BadRequest);
+        }
+    }
+
+    for(auto it = body.constBegin(); it != body.constEnd(); ++it) {
+        if(_source->setSettingValue(it.key(), it.value().toString()) == false) {
+            return QHttpServerResponse(QJsonObject{{"error", "failed to write settings"}},
+                                       QHttpServerResponder::StatusCode::InternalServerError);
+        }
     }
 
     QJsonObject responseObject;
