@@ -15,9 +15,9 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
+    "allowJs": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]
 }
