@@ -149,3 +149,37 @@ button, input, select {
   align-items: center;
   gap: var(--gap);
 }
+
+.program {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--gap);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.program__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.program__header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.program ul,
+.program ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-dim);
+}
+
+.program [role='switch'][aria-checked='false'] {
+  color: var(--ink-dim);
+}
