@@ -17,6 +17,7 @@ private slots:
     void programZonesRoundTripInSequenceOrder();
     void startTimeRoundTripsAllFields();
     void updateZoneChangesNameAndEnabled();
+    void updateZoneLandsCorrectlyWhenNumberDiffersFromId();
     void updateProgramChangesFields();
     void enabledProgramsExcludesDisabled();
     void settingValueRoundTrips();
@@ -239,6 +240,35 @@ void TestRepository::updateZoneChangesNameAndEnabled()
     // The untouched zones must survive the update unchanged.
     QCOMPARE(updated.at(1).name, QString("Zone 2"));
     QCOMPARE(updated.at(1).enabled, true);
+}
+
+void TestRepository::updateZoneLandsCorrectlyWhenNumberDiffersFromId()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    // Every seeded zone has number == id, which would let a swapped :number/:id
+    // bind in updateZone() go unnoticed. Break that equality before testing it.
+    bool seeded = false;
+    source.rawQuery("UPDATE zones SET number = 99 WHERE id = 1", &seeded);
+    QVERIFY(seeded);
+
+    Zone zone;
+    zone.id = 1;
+    zone.number = 99;
+    zone.name = "Mismatched";
+    zone.enabled = false;
+    QVERIFY(source.updateZone(zone));
+
+    bool ok = false;
+    QSqlQuery row = source.rawQuery("SELECT id, number, name, enabled FROM zones WHERE id = 1", &ok);
+    QVERIFY(ok);
+    QVERIFY(row.next());
+    QCOMPARE(row.value(0).toInt(), 1);
+    QCOMPARE(row.value(1).toInt(), 99);
+    QCOMPARE(row.value(2).toString(), QString("Mismatched"));
+    QCOMPARE(row.value(3).toInt(), 0);
 }
 
 void TestRepository::updateProgramChangesFields()
