@@ -5056,7 +5056,7 @@ git commit --only -m "feat: add the program editor" -- web
 
 Spec §8: rain delay, master enable, maximum zone runtime, zone names.
 
-The `settings` table is key/value TEXT, so every value crosses the wire as a string. The daemon accepts only `"0"` and `"1"` for `master_enabled` and stops watering only when the stored value is exactly `"0"` (`isValidSettingValue()` in `irrigationcontrolserver.cpp`, the master check in `scheduler.cpp`). `Boolean('0')` is `true` in JavaScript, so a truthiness read shows a disabled controller as enabled. A read that matches spellings such as `'false'` goes wrong the other way: it shows watering off while the daemon keeps running programs.
+The `settings` table is key/value TEXT, so every value crosses the wire as a string. The daemon accepts only `"0"` and `"1"` for `master_enabled` and stops watering only when the stored value is exactly `"0"` (`isValidSettingValue()` in `irrigationcontrolserver.cpp`, and `IrrigationDataSource::isMasterEnabled()`, which the scheduler, both manual-run paths and `/admin/status` share). `Boolean('0')` is `true` in JavaScript, so a truthiness read shows a disabled controller as enabled. A read that matches spellings such as `'false'` goes wrong the other way: it shows watering off while the daemon keeps running programs.
 
 `max_zone_seconds` is seeded as `'3600'`, so the screen falls back to 3600 seconds when the key is absent. The committed daemon does not read this key yet; see Known gaps.
 
@@ -6155,7 +6155,7 @@ Three sessions work this tree on disjoint subtrees. These were established by th
 - **`GET /admin/programs` will carry a per-program `nextRunUtc`.** Ruled on the daemon side and recorded in its ledger for the Task 9 dispatch. This plan still decodes the field as optional, so the UI is correct whether or not that lands first.
 - **The document root is `/var/www/irrigation/html`** and the `irrigation-web_1.0.bb` recipe hard-fails the image build when `web/dist/` is missing or holds no `index.html`. There is no `nodejs` in the image; the bundle is static.
 - **nginx does `try_files $uri $uri/ /index.html`** and proxies `/api/` to `http://127.0.0.1:8080` with `Host`, `X-Real-IP`, `X-Forwarded-For` and `X-Forwarded-Proto` set. The daemon binds loopback only.
-- **`master_enabled` is `"0"` or `"1"` on the wire.** `isValidSettingValue()` in `IrrigationD/src/irrigationcontrolserver.cpp` rejects anything else with a 400, and `scheduler.cpp` stops watering only when the stored value is exactly `"0"`.
+- **`master_enabled` is `"0"` or `"1"` on the wire.** `isValidSettingValue()` in `IrrigationD/src/irrigationcontrolserver.cpp` rejects anything else with a 400, and `IrrigationDataSource::isMasterEnabled()` (`IrrigationD/src/database/irrigationdatasource.cpp`), shared by the scheduler, both manual-run paths and `/admin/status`, stops watering only when the stored value is exactly `"0"`.
 
 ---
 
@@ -6167,3 +6167,4 @@ Three sessions work this tree on disjoint subtrees. These were established by th
 - **There is no optimistic update anywhere.** Every write is followed by a reload or a status refresh. On a LAN with a loopback daemon that costs one round trip and removes a class of bug where the screen shows a state the controller rejected.
 - **Nothing tests the real bundle against the real daemon.** Task 1 Step 8 is a manual `curl` through the dev proxy and Task 10 Step 5 is a manual look at `dist/index.html`. An end-to-end check belongs with the Yocto layer's image test, which is a different plan.
 - **The daemon does not read `max_zone_seconds`.** The Settings screen writes the key spec §6 names, and the daemon validates and stores it, but `ZoneController` clamps runs to `limits/maxZoneSeconds` from the INI file (`IrrigationD/src/irrigationsettings.h`, default 3600), read once at startup. Until the daemon reads the settings key, changing the ceiling on the Settings screen changes nothing the valves do.
+- **A refused manual run looks like a run that never started.** The daemon answers `POST /admin/zones/{number}/run` and `POST /admin/programs/{id}/run` with 202 before it decides, then refuses the run while the stop button is held or the master enable is off, recording the reason only in its log. The Now screen shows no error, and the next poll shows nothing running. `/admin/status` carries `masterEnabled`, which no screen renders today. It carries nothing about the stop button, so the browser cannot explain the held case at all.
