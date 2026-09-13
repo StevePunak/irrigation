@@ -27,12 +27,12 @@ These apply to every task. A task's requirements implicitly include this section
 - **Every API instant is UTC and every rendered instant goes through `src/time/zonedformat.ts` with an explicit IANA zone id** taken from `/api/status`. `toLocaleString`, `toLocaleTimeString`, `toLocaleDateString` and a bare `Intl.DateTimeFormat` are banned in application code — they read the browser's zone, which is correct on a laptop in the same timezone as the controller and wrong everywhere else.
 - **Tests run under `TZ=UTC`.** The npm scripts set it and `src/test/setup.ts` aborts the suite if the host zone resolves to anything else. A timezone test on a host that already sits in the zone under test proves nothing.
 - **No network origin in the bundle.** No CDN scripts, no Google Fonts, no remote images. The controller has no internet and the browser loading this page may not either.
-- **Filenames:** `PascalCase.tsx` for components and screens, `camelCase.ts` for modules. Tests are colocated as `<name>.test.ts` / `<name>.test.tsx`.
+- **Filenames:** `PascalCase.tsx` for components and screens, `camelCase.ts` for modules. Tests are colocated as `<name>.test.ts` / `<name>.test.tsx`, or as `<name>.test.mjs` beside a plain-JavaScript script under `scripts/`.
 - **Comments state traps, not reasoning.** A comment earns its place only when a plausible future edit would silently break behaviour and the code cannot show why. Design rationale, pattern names and descriptions of what previous code did wrong belong in the commit message.
 - **No "it's X, not Y" antithesis** in code, comments, commit messages or documentation. Delete the negated clause; if the sentence still says everything it said, the construction was doing no work.
 - Commit messages are conventional commits and end with:
   ```
-  Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+  Co-Authored-By: <the committing session's own harness attribution, never copied from an earlier commit>
   ```
 
 ---
@@ -184,6 +184,7 @@ Everything below `web/`.
 | `src/test/fetchStub.ts` | Typed `fetch` stub with a recorded call log. |
 | `src/test/fixtures.ts` | Shared `Status`, `Zone[]`, `Program[]` fixtures with `id !== number`. |
 | `scripts/checkBundle.mjs` | Fails the build if `dist/` references a network origin. |
+| `scripts/checkBundleCli.mjs` | Runs the bundle check as the last step of `npm run build` and exits 1 on any problem. |
 | `README.md` | Dev loop, scripts, the API contract, the two zone identifiers. |
 
 ---
@@ -280,7 +281,7 @@ declarations and never type-checks that project's own sources, so a two-project 
 compiles clean and exits 0. Measured. The `include` list above is what puts the config files and
 `scripts/` under the same `tsc --noEmit` the source is under.
 
-`allowJs` is what lets `src/build/checkBundle.test.ts` import `scripts/checkBundle.mjs` in Task 10.
+Task 10 adds its bundle guard and that guard's test as plain `.mjs` files under `scripts/`.
 Without it that import fails with `TS7016: Could not find a declaration file`.
 
 There is no `tsconfig.node.json`. A second project would have to be `composite` to be referenced,
@@ -5410,6 +5411,32 @@ describe('SettingsScreen', () => {
     expect(putZone.mock.calls[0]![1]).toEqual({ name: 'Pots', enabled: false })
   })
 
+  it('shows no settings values when they could not be loaded', async () => {
+    vi.spyOn(client, 'getSettings').mockRejectedValue(new Error('controller unreachable'))
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/controller unreachable/i)
+    expect(screen.getByTestId('settings-unknown')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/master enable/i)).toBeNull()
+    expect(screen.queryByLabelText(/maximum zone runtime/i)).toBeNull()
+    expect(screen.queryByText(/no rain delay/i)).toBeNull()
+  })
+
+  it('refuses a ceiling that is not a whole number of minutes', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    const field = await screen.findByLabelText(/maximum zone runtime/i)
+    await user.clear(field)
+    await user.type(field, '1.25')
+    await user.click(screen.getByRole('button', { name: /save ceiling/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/whole minutes/i)
+    expect(putSettings).not.toHaveBeenCalled()
+  })
+
   it('reports a rejected write', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     vi.spyOn(client, 'putSettings').mockRejectedValue(new Error('database is locked'))
@@ -5430,6 +5457,8 @@ What each one kills:
 - `carries the enabled flag through a rename` — `PUT /admin/zones/{number}` takes the whole row. A body carrying only `{ name }` re-enables a zone the user deliberately turned off, and zone 7 in the fixtures is the one that is off.
 - `renames a zone by its zone number` asserts both `number` and `id` on the argument, the same transposition guard as the Now screen.
 - `shows no rain delay for an empty value` — treating `''` as a date renders `Invalid Date` or `NaN`, which reads as a bug rather than as "no delay set".
+- `shows no settings values when they could not be loaded` — a screen that starts from an empty settings map shows master enable checked, a 60-minute ceiling and no rain delay after a failed load, three claims about values it never received.
+- `refuses a ceiling that is not a whole number of minutes` — `1.501` minutes would send `"90.06"`, which the daemon's validator answers with a 400.
 
 - [ ] **Step 5: Write the Settings screen**
 
@@ -5453,7 +5482,7 @@ import type { ScreenProps } from './screenProps'
 const RAIN_DELAY_CHOICES = [1, 2, 3, 7]
 
 export default function SettingsScreen({ status, refresh }: ScreenProps) {
-  const [settings, setSettings] = useState<SettingsMap>({})
+  const [settings, setSettings] = useState<SettingsMap | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [names, setNames] = useState<Record<number, string>>({})
   const [ceilingMinutes, setCeilingMinutes] = useState(DEFAULT_MAX_ZONE_SECONDS / 60)
@@ -5483,7 +5512,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
       setError(null)
       try {
         await putSettings(patch)
-        setSettings((current) => ({ ...current, ...patch }))
+        setSettings((current) => (current === null ? current : { ...current, ...patch }))
         refresh()
       } catch (caught: unknown) {
         setError(caught instanceof Error ? caught.message : String(caught))
@@ -5492,13 +5521,13 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
     [refresh],
   )
 
-  const masterEnabled = parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])
-  const rainDelayUntil = parseInstant(settings[SETTING_KEYS.rainDelayUntil])
+  const masterEnabled = settings === null ? null : parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])
+  const rainDelayUntil = parseInstant(settings?.[SETTING_KEYS.rainDelayUntil])
   const controllerZone = status?.timezone ?? ''
 
   const onSaveCeiling = useCallback(() => {
-    if (ceilingMinutes < 1) {
-      setError('The maximum zone runtime must be at least one minute.')
+    if (Number.isInteger(ceilingMinutes) === false || ceilingMinutes < 1) {
+      setError('The maximum zone runtime must be at least one minute, in whole minutes.')
       return
     }
     void write({ [SETTING_KEYS.maxZoneSeconds]: String(ceilingMinutes * 60) })
@@ -5527,64 +5556,70 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
         </div>
       )}
 
-      <h2>Watering</h2>
+      {settings === null ? (
+        <p data-testid="settings-unknown">Settings are unknown until the controller answers.</p>
+      ) : (
+        <>
+          <h2>Watering</h2>
 
-      <label>
-        Master enable
-        <input
-          type="checkbox"
-          checked={masterEnabled}
-          onChange={(event) => {
-            void write({ [SETTING_KEYS.masterEnabled]: serializeMasterEnabled(event.target.checked) })
-          }}
-        />
-      </label>
+          <label>
+            Master enable
+            <input
+              type="checkbox"
+              checked={masterEnabled === true}
+              onChange={(event) => {
+                void write({ [SETTING_KEYS.masterEnabled]: serializeMasterEnabled(event.target.checked) })
+              }}
+            />
+          </label>
 
-      <label>
-        Maximum zone runtime (minutes)
-        <input
-          type="number"
-          min={1}
-          value={ceilingMinutes}
-          onChange={(event) => {
-            setCeilingMinutes(Number(event.target.value))
-          }}
-        />
-      </label>
-      <button type="button" onClick={onSaveCeiling}>
-        Save ceiling
-      </button>
-
-      <h2>Rain delay</h2>
-
-      <div data-testid="rain-delay-state">
-        {rainDelayUntil === null
-          ? 'No rain delay'
-          : `Watering paused until ${formatDayAndClock(rainDelayUntil, controllerZone)}`}
-      </div>
-
-      <div className="row">
-        {RAIN_DELAY_CHOICES.map((days) => (
-          <button
-            key={days}
-            type="button"
-            onClick={() => {
-              const until = new Date(Date.now() + days * 86400000).toISOString()
-              void write({ [SETTING_KEYS.rainDelayUntil]: until })
-            }}
-          >
-            {`Delay ${days} ${days === 1 ? 'day' : 'days'}`}
+          <label>
+            Maximum zone runtime (minutes)
+            <input
+              type="number"
+              min={1}
+              value={ceilingMinutes}
+              onChange={(event) => {
+                setCeilingMinutes(Number(event.target.value))
+              }}
+            />
+          </label>
+          <button type="button" onClick={onSaveCeiling}>
+            Save ceiling
           </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => {
-            void write({ [SETTING_KEYS.rainDelayUntil]: '' })
-          }}
-        >
-          Clear rain delay
-        </button>
-      </div>
+
+          <h2>Rain delay</h2>
+
+          <div data-testid="rain-delay-state">
+            {rainDelayUntil === null
+              ? 'No rain delay'
+              : `Watering paused until ${formatDayAndClock(rainDelayUntil, controllerZone)}`}
+          </div>
+
+          <div className="row">
+            {RAIN_DELAY_CHOICES.map((days) => (
+              <button
+                key={days}
+                type="button"
+                onClick={() => {
+                  const until = new Date(Date.now() + days * 86400000).toISOString()
+                  void write({ [SETTING_KEYS.rainDelayUntil]: until })
+                }}
+              >
+                {`Delay ${days} ${days === 1 ? 'day' : 'days'}`}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                void write({ [SETTING_KEYS.rainDelayUntil]: '' })
+              }}
+            >
+              Clear rain delay
+            </button>
+          </div>
+        </>
+      )}
 
       <h2>Zone names</h2>
 
@@ -5629,6 +5664,8 @@ Expected: every settings case passes.
 
 Replace `parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])` with `Boolean(settings[SETTING_KEYS.masterEnabled])`, run `npm test -- SettingsScreen`, and confirm `reads "0" as disabled` fails. Revert.
 
+Change `useState<SettingsMap | null>(null)` to `useState<SettingsMap | null>({})` and confirm `shows no settings values when they could not be loaded` fails. Revert.
+
 - [ ] **Step 8: Commit**
 
 ```bash
@@ -5647,33 +5684,56 @@ The recipe hard-fails the image build when `web/dist/` is missing or holds no `i
 
 **Files:**
 - Create: `web/scripts/checkBundle.mjs`
+- Create: `web/scripts/checkBundleCli.mjs`
 - Create: `web/README.md`
-- Test: `web/src/build/checkBundle.test.ts`
+- Modify: `web/package.json`, `web/tsconfig.json`, `web/vitest.config.ts`
+- Test: `web/scripts/checkBundle.test.mjs`
 
 **Interfaces:**
 - Produces:
   - `scanForExternalOrigins(text: string): string[]`
   - `checkBundleDir(dir: string): string[]` — returns the list of problems; empty means the bundle is fit to install
+  - `node scripts/checkBundleCli.mjs [dir]` — prints each problem and exits 1, or exits 0 when `dir` (default `dist`) is fit to install
 
-- [ ] **Step 1: Confirm the compiler already covers `scripts/`**
+- [ ] **Step 1: Wire the guard into the build and the gates**
 
-Task 1's `tsconfig.json` carries `"allowJs": true` and lists `scripts` in `include`, which is what
-lets the test below import `checkBundle.mjs`. No change is needed here. Confirm both are present
-before writing the test; without them the import fails with `TS7016: Could not find a declaration
-file for module '../../scripts/checkBundle.mjs'`.
+Three one-line edits.
+
+`web/package.json`, so the build runs the command file:
+
+```json
+"build": "tsc --noEmit && vite build && node scripts/checkBundleCli.mjs",
+```
+
+`web/tsconfig.json`, so the type gate covers all three config files:
+
+```json
+"include": ["src", "scripts", "vite.config.ts", "vitest.config.ts", "vitest.wallclock.config.ts"]
+```
+
+`web/vitest.config.ts`, so the main run picks up the guard's tests:
+
+```ts
+include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.mjs'],
+```
+
+Install nothing. The guard and its test are plain JavaScript, and the test runs under `// @vitest-environment node`, so no Node type declarations are needed. Adding `@types/node` lets `process` and every other Node global type-check inside `src/`, where they throw on the controller, and no test catches that because Vitest itself runs under Node. With it absent, `process.env` in a component fails `tsc` with TS2591.
 
 - [ ] **Step 2: Write the failing bundle-guard tests**
 
-`web/src/build/checkBundle.test.ts`:
+`web/scripts/checkBundle.test.mjs`:
 
-```ts
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+```js
+// @vitest-environment node
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { checkBundleDir, scanForExternalOrigins } from '../../scripts/checkBundle.mjs'
+import { checkBundleDir, scanForExternalOrigins } from './checkBundle.mjs'
 
-function bundle(files: Record<string, string>): string {
+function bundle(files) {
   const dir = mkdtempSync(join(tmpdir(), 'irrigation-bundle-'))
   for (const [name, content] of Object.entries(files)) {
     const path = join(dir, name)
@@ -5714,6 +5774,20 @@ describe('scanForExternalOrigins', () => {
       scanForExternalOrigins('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>'),
     ).toEqual([])
     expect(scanForExternalOrigins('<html xmlns="http://www.w3.org/1999/xhtml">')).toEqual([])
+  })
+
+  it('allows the error-reference links React embeds in its production build', () => {
+    expect(scanForExternalOrigins('Error("Minified React error #"+e+"; visit https://react.dev/errors/"+e)')).toEqual([])
+  })
+
+  it('reports any other path on a host with an allowed prefix', () => {
+    expect(scanForExternalOrigins('fetch("https://react.dev/api/telemetry")')).toContain('https://react.dev')
+  })
+
+  it('reports a host whose name only begins with an allowed one', () => {
+    expect(scanForExternalOrigins('<script src="http://www.w3.org.example.com/x.js"></script>')).toContain(
+      'http://www.w3.org.example.com',
+    )
   })
 
   it('allows root-relative and same-origin urls', () => {
@@ -5769,11 +5843,38 @@ describe('checkBundleDir', () => {
     expect(checkBundleDir(dir)).toEqual([])
   })
 })
+
+describe('the build-step command', () => {
+  function copyCommand() {
+    const dir = mkdtempSync(join(tmpdir(), 'irrigation bundle command '))
+    for (const name of ['checkBundle.mjs', 'checkBundleCli.mjs']) {
+      copyFileSync(fileURLToPath(new URL(name, import.meta.url)), join(dir, name))
+    }
+    return join(dir, 'checkBundleCli.mjs')
+  }
+
+  it('exits non-zero naming the origin, even from a path containing spaces', () => {
+    const dir = bundle({ 'index.html': '<link href="https://fonts.googleapis.com/css2" rel="stylesheet">' })
+    const result = spawnSync(process.execPath, [copyCommand(), dir], { encoding: 'utf8' })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toMatch(/fonts\.googleapis\.com/)
+  })
+
+  it('exits zero on a clean bundle', () => {
+    const dir = bundle({ 'index.html': '<!doctype html><script type="module" src="/assets/app.js"></script>' })
+    const result = spawnSync(process.execPath, [copyCommand(), dir], { encoding: 'utf8' })
+    expect(result.status).toBe(0)
+  })
+})
 ```
 
 `reports a directory with no index.html` is the condition the Yocto recipe fails on. An interrupted `npm run build` leaves `dist/` present and empty, the recipe installs nothing, and nginx answers a silent 403 with no clue where it came from.
 
 `allows the XML namespace urls that svg markup carries` is the false positive that would otherwise make this check useless the first time anyone inlines an icon. `ignores source maps` is the second — a map file records absolute source paths and is never fetched by the page.
+
+`reports a host whose name only begins with an allowed one` and `reports any other path on a host with an allowed prefix` pin the allowlist to whole-url prefixes that end in `/`. `allows the error-reference links React embeds in its production build` is the third false positive: React 19's minified error messages carry `https://react.dev/errors/`, so a clean `npm run build` fails without it.
+
+`exits non-zero naming the origin, even from a path containing spaces` runs the command file the way `npm run build` does, from a copied location whose path holds spaces. A single-file script that decides whether it was invoked directly by comparing `import.meta.url` with `process.argv[1]` sees a percent-encoded url there, exits 0, and scans nothing.
 
 - [ ] **Step 3: Run it and verify it fails**
 
@@ -5791,21 +5892,21 @@ Expected: failure — `scripts/checkBundle.mjs` does not exist.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-const ORIGIN_PATTERN = /(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}/gi
+const URL_PATTERN = /((?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,})([^\s"'`()<>]*)/gi
 
-const ALLOWED_ORIGINS = ['http://www.w3.org', 'https://www.w3.org']
+/** Matched against the whole url, so every entry must end in "/" or a lookalike host passes. */
+const ALLOWED_PREFIXES = ['http://www.w3.org/', 'https://www.w3.org/', 'https://react.dev/errors/']
 
 const SCANNED_EXTENSIONS = ['.html', '.js', '.mjs', '.css', '.json', '.svg']
 
 /** Returns every remote origin referenced in `text`, deduplicated. */
 export function scanForExternalOrigins(text) {
   const found = new Set()
-  for (const match of text.matchAll(ORIGIN_PATTERN)) {
-    const origin = match[0]
-    if (ALLOWED_ORIGINS.some((allowed) => origin.startsWith(allowed))) {
+  for (const match of text.matchAll(URL_PATTERN)) {
+    if (ALLOWED_PREFIXES.some((allowed) => match[0].startsWith(allowed))) {
       continue
     }
-    found.add(origin)
+    found.add(match[1])
   }
   return [...found]
 }
@@ -5855,20 +5956,22 @@ export function checkBundleDir(dir) {
 
   return problems
 }
+```
 
-const invokedDirectly = process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'))
+`web/scripts/checkBundleCli.mjs`:
 
-if (invokedDirectly) {
-  const target = process.argv[2] ?? 'dist'
-  const problems = checkBundleDir(target)
-  if (problems.length > 0) {
-    for (const problem of problems) {
-      console.error(`bundle check: ${problem}`)
-    }
-    process.exit(1)
+```js
+import { checkBundleDir } from './checkBundle.mjs'
+
+const target = process.argv[2] ?? 'dist'
+const problems = checkBundleDir(target)
+if (problems.length > 0) {
+  for (const problem of problems) {
+    console.error(`bundle check: ${problem}`)
   }
-  console.log(`bundle check: ${target} is fit to install`)
+  process.exit(1)
 }
+console.log(`bundle check: ${target} is fit to install`)
 ```
 
 - [ ] **Step 5: Run the production build**
@@ -5877,7 +5980,7 @@ if (invokedDirectly) {
 cd web && npm run build
 ```
 
-`npm run build` is `tsc --noEmit && vite build && node scripts/checkBundle.mjs`, so a type error, a build failure or an external origin each stop it.
+`npm run build` is `tsc --noEmit && vite build && node scripts/checkBundleCli.mjs`, so a type error, a build failure or an external origin each stop it.
 
 Expected: `dist/index.html` exists and the check prints `dist is fit to install`.
 
@@ -5891,7 +5994,7 @@ Expected: every `src` and `href` is a root-relative `/assets/...` path.
 
 Add `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">` to `web/index.html`, run `npm run build`, and confirm it exits non-zero naming `fonts.googleapis.com`. Revert.
 
-Then `rm dist/index.html && node scripts/checkBundle.mjs dist` and confirm it exits non-zero naming the recipe. Rebuild.
+Then `rm dist/index.html && node scripts/checkBundleCli.mjs dist` and confirm it exits non-zero naming the recipe. Rebuild.
 
 - [ ] **Step 7: Write the README**
 
@@ -5908,7 +6011,7 @@ Spec: `../docs/design/2026-09-05-irrigation-design.md` §8.
 | Command | Does |
 |---|---|
 | `npm run dev` | Vite dev server on 5173, proxying `/api` to `127.0.0.1:8080/admin` |
-| `npm test` | Vitest under `TZ=UTC` |
+| `npm test` | Vitest under `TZ=UTC`, then the wall-clock suite under `TZ=America/Los_Angeles` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | typecheck, build to `dist/`, then the bundle guard |
 
