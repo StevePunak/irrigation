@@ -9,8 +9,9 @@ StopButton::StopButton(IGpioBackend* backend, quint32 offset, QObject* parent) :
 
 bool StopButton::begin()
 {
+    // Non-null _pin means a previous call already succeeded; a failed call leaves it null again.
     if(_pin != nullptr) {
-        _errorText = QString("begin() has already been called");
+        _errorText = QString("The stop button line is already requested");
         return false;
     }
 
@@ -23,6 +24,8 @@ bool StopButton::begin()
 
     if(_pin->request() == false) {
         _errorText = _pin->errorText();
+        delete _pin;
+        _pin = nullptr;
         return false;
     }
 
@@ -33,6 +36,8 @@ bool StopButton::begin()
     _held = _pin->isAsserted(&ok);
     if(ok == false) {
         _errorText = _pin->errorText();
+        delete _pin;
+        _pin = nullptr;
         return false;
     }
 
