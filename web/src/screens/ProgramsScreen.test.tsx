@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProgramsScreen from './ProgramsScreen'
 import * as client from '../api/client'
-import type { Program } from '../api/types'
+import { ApiError, type Program } from '../api/types'
 import { idleStatus, morningProgram, zoneFixtures } from '../test/fixtures'
 
 const refresh = vi.fn()
@@ -121,6 +121,7 @@ describe('ProgramsScreen', () => {
   it('reloads the list after a toggle so a rejected write cannot look applied', async () => {
     const user = userEvent.setup()
     const getPrograms = vi.spyOn(client, 'getPrograms').mockResolvedValue([morningProgram, eveningProgram])
+    vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
 
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
     await screen.findByTestId('program-1')
@@ -131,11 +132,22 @@ describe('ProgramsScreen', () => {
     await waitFor(() => {
       expect(getPrograms).toHaveBeenCalledTimes(2)
     })
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
   })
 
   it('says so when there are no programs', async () => {
     vi.spyOn(client, 'getPrograms').mockResolvedValue([])
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
     expect(await screen.findByText(/no programs yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('ProgramsScreen with no status', () => {
+  it('marks times it cannot place rather than guessing a zone', async () => {
+    render(<ProgramsScreen status={null} polls={0} refresh={refresh} />)
+
+    const morning = await screen.findByTestId('program-1')
+    expect(within(morning).getByTestId('next-run')).toHaveTextContent('--')
+    expect(within(morning).getByTestId('start-times')).toHaveTextContent('America/Los_Angeles')
   })
 })

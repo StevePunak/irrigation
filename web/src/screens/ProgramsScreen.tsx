@@ -32,12 +32,16 @@ export default function ProgramsScreen({ status }: ScreenProps) {
 
   const onToggle = useCallback(
     async (program: Program) => {
+      let toggleError: string | null = null
       try {
         await updateProgram(program.id, { ...toDraft(program), enabled: program.enabled === false })
       } catch (caught: unknown) {
-        setError(caught instanceof Error ? caught.message : String(caught))
+        toggleError = caught instanceof Error ? caught.message : String(caught)
       }
       await load()
+      if (toggleError !== null) {
+        setError(toggleError)
+      }
     },
     [load],
   )

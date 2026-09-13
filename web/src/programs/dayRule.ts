@@ -42,7 +42,12 @@ function formatAnchor(anchorDate: string | null): string {
   if (match === null) {
     return 'an unset date'
   }
-  return `${Number(match[3])} ${MONTH_LABELS[Number(match[2]) - 1]} ${match[1]}`
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return 'an unset date'
+  }
+  return `${day} ${MONTH_LABELS[month - 1]} ${match[1]}`
 }
 
 export function dayRuleSummary(
