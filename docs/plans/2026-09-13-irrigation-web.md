@@ -1850,7 +1850,7 @@ Spec §8: `/admin/status` every 2 s while a zone is running, every 15 s otherwis
 `web/src/hooks/useStatus.test.ts`:
 
 ```ts
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as client from '../api/client'
 import { idleStatus, runningStatus } from '../test/fixtures'
@@ -2030,6 +2030,33 @@ describe('useStatus', () => {
     expect(result.current.polls).toBe(2)
   })
 
+  it('backs off to the idle interval after a failed poll, even mid-run', async () => {
+    const getStatus = vi
+      .spyOn(client, 'getStatus')
+      .mockResolvedValueOnce(runningStatus)
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(runningStatus)
+
+    renderHook(() => useStatus())
+    await settle()
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+  })
+
   it('stops polling once unmounted', async () => {
     const getStatus = vi.spyOn(client, 'getStatus').mockResolvedValue(idleStatus)
     const { unmount } = renderHook(() => useStatus())
@@ -2102,8 +2129,10 @@ What each one kills:
 - `tightens the interval as soon as a poll reports a run` — an interval captured once at mount into a `setInterval` fails. Reading the cadence off the status that just arrived is the whole point; a manual run started from the Now screen has to speed the poll up without a remount.
 - `keeps the last good status and marks it stale` — a handler that sets `status` to `null` on error blanks the running zone and the remaining time the moment wifi hiccups. The stop control has to stay usable through that.
 - `keeps polling after a failure rather than giving up` — a `catch` that returns without rescheduling leaves the page permanently frozen after one dropped packet, and the user sees a plausible stale screen forever.
+- `backs off to the idle interval after a failed poll, even mid-run` — the catch block leaves `next` at `IDLE_POLL_MS` on purpose. Restore `next = intervalFor(...)` there and an unreachable daemon gets hit every two seconds for as long as the page is open. No other case fails after a *running* poll, so nothing else catches it.
+- `resets when a new epoch repeats the previous seconds value` — every other countdown case moves `seconds` and `epoch` together, so a hook keyed on `seconds` passes all of them. Measured. This is the only combination that separates the two.
 - `stops polling once unmounted` — no cleanup and every navigation leaks a timer.
-- `never overlaps two requests` — `setInterval` instead of a chained `setTimeout` stacks requests against a daemon that is already slow, which is exactly when it is least able to answer them.
+- `never overlaps two requests` — the `inFlight` ref is what this one guards; remove it and a slow daemon collects stacked requests at exactly the moment it can least answer them. A `setInterval` implementation that kept the guard would also pass, so this case does not on its own justify the chained `setTimeout`.
 
 - [ ] **Step 2: Run it and verify it fails**
 
@@ -2271,6 +2300,20 @@ describe('useCountdown', () => {
     expect(result.current).toBe(116)
   })
 
+  it('resets when a new epoch repeats the previous seconds value', () => {
+    const { result, rerender } = renderHook(({ seconds, epoch }) => useCountdown(seconds, epoch), {
+      initialProps: { seconds: 120, epoch: 1 },
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(4000)
+    })
+    expect(result.current).toBe(116)
+
+    rerender({ seconds: 120, epoch: 2 })
+    expect(result.current).toBe(120)
+  })
+
   it('floors at zero', () => {
     const { result } = renderHook(() => useCountdown(2, 1))
 
@@ -2300,8 +2343,8 @@ import { useEffect, useRef, useState } from 'react'
 
 /**
  * Ticks `seconds` down locally between polls. `epoch` identifies the poll the
- * value came from; a change resets the count. Keying the reset on `seconds`
- * instead stalls the display whenever two polls report the same value.
+ * value came from. A change to `epoch` resets the count. A repeated `seconds`
+ * value alone does not.
  */
 export function useCountdown(seconds: number, epoch: number): number {
   const [remaining, setRemaining] = useState(seconds)
