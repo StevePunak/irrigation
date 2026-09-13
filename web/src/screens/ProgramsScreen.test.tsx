@@ -118,7 +118,7 @@ describe('ProgramsScreen', () => {
     })
   })
 
-  it('reloads the list after a toggle so a rejected write cannot look applied', async () => {
+  it('reloads the list after a failed toggle so a rejected write cannot look applied', async () => {
     const user = userEvent.setup()
     const getPrograms = vi.spyOn(client, 'getPrograms').mockResolvedValue([morningProgram, eveningProgram])
     vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
@@ -132,7 +132,32 @@ describe('ProgramsScreen', () => {
     await waitFor(() => {
       expect(getPrograms).toHaveBeenCalledTimes(2)
     })
+  })
+
+  it('keeps a failed toggle visible after the reload clears the error state', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'getPrograms').mockResolvedValue([morningProgram, eveningProgram])
+    vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'database is locked'))
+
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('switch'))
+
     expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+  })
+
+  it('reports the failed toggle when the reload fails too', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'getPrograms')
+      .mockResolvedValueOnce([morningProgram])
+      .mockRejectedValue(new ApiError(503, 'reload failed'))
+    vi.spyOn(client, 'updateProgram').mockRejectedValue(new ApiError(500, 'toggle failed'))
+
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('switch'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/toggle failed/i)
+    expect(alert).not.toHaveTextContent(/reload failed/i)
   })
 
   it('says so when there are no programs', async () => {
