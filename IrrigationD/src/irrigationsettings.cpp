@@ -1,7 +1,16 @@
 #include "irrigationsettings.h"
 
+const QString IrrigationSettings::KEY_ZONES              = "gpio/zones";
+const QString IrrigationSettings::KEY_CHIP_LABEL         = "gpio/chipLabel";
+const QString IrrigationSettings::KEY_ZONE_ACTIVE_LOW    = "gpio/zoneActiveLow";
+const QString IrrigationSettings::KEY_STOP_BUTTON_OFFSET = "gpio/stopButtonOffset";
+const QString IrrigationSettings::KEY_MAX_ZONE_SECONDS   = "limits/maxZoneSeconds";
+const QString IrrigationSettings::KEY_BIND_ADDRESS       = "server/bindAddress";
+const QString IrrigationSettings::KEY_LISTEN_PORT        = "server/listenPort";
+const QString IrrigationSettings::KEY_DATABASE_PATH      = "database/path";
+
 IrrigationSettings::IrrigationSettings(const QString& path) :
-    _settings(path, QSettings::IniFormat)
+    AppSettings(path)
 {
 }
 
@@ -9,7 +18,7 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
 {
     QMap<int, quint32> result;
 
-    QString raw = _settings.value("gpio/zones").toString();
+    QString raw = _settings.value(KEY_ZONES).toString();
     const QStringList pairs = raw.split(',', Qt::SkipEmptyParts);
     for(const QString& pair : pairs) {
         QStringList parts = pair.split('=');
@@ -31,37 +40,4 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
     return result;
 }
 
-QString IrrigationSettings::chipLabel() const
-{
-    return _settings.value("gpio/chipLabel", "pinctrl-bcm2711").toString();
-}
-
-bool IrrigationSettings::zoneActiveLow() const
-{
-    return _settings.value("gpio/zoneActiveLow", true).toBool();
-}
-
-quint32 IrrigationSettings::stopButtonOffset() const
-{
-    return _settings.value("gpio/stopButtonOffset", 25).toUInt();
-}
-
-int IrrigationSettings::maxZoneSeconds() const
-{
-    return _settings.value("limits/maxZoneSeconds", 3600).toInt();
-}
-
-QString IrrigationSettings::bindAddress() const
-{
-    return _settings.value("server/bindAddress", "127.0.0.1").toString();
-}
-
-int IrrigationSettings::listenPort() const
-{
-    return _settings.value("server/listenPort", 8080).toInt();
-}
-
-QString IrrigationSettings::databasePath() const
-{
-    return _settings.value("database/path", "/var/lib/irrigationd/irrigation.db").toString();
-}
+#include "moc_irrigationsettings.cpp"
