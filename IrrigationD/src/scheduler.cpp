@@ -148,7 +148,7 @@ void Scheduler::tick()
 {
     const QDateTime nowUtc = _clock->nowUtc();
 
-    if(_source->settingValue("master_enabled") == "0") {
+    if(_source->isMasterEnabled() == false) {
         return;
     }
 

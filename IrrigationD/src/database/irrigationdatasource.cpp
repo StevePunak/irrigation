@@ -451,6 +451,28 @@ bool IrrigationDataSource::hasFired(int programId, int startTimeId, const QDateT
     return query.next();
 }
 
+bool IrrigationDataSource::setFiringOutcome(int programId, int startTimeId, const QDateTime& scheduledAtUtc, FiredInstant::Outcome outcome)
+{
+    bool success = false;
+    QSqlQuery query = prepareQuery(
+        "UPDATE fired_instants SET outcome = :outcome "
+        "WHERE program_id = :programId AND start_time_id = :startTimeId AND scheduled_at_utc = :scheduledAt",
+        &success);
+    if(success == false) {
+        return false;
+    }
+
+    query.bindValue(":outcome",     FiredInstant::outcomeToString(outcome));
+    query.bindValue(":programId",   programId);
+    query.bindValue(":startTimeId", startTimeId);
+    query.bindValue(":scheduledAt", scheduledAtUtc.toUTC().toString(Qt::ISODate));
+
+    if(executeQuery(query) == false) {
+        return false;
+    }
+    return query.numRowsAffected() == 1;
+}
+
 bool IrrigationDataSource::pruneFiredInstantsOlderThan(const QDateTime& cutoffUtc)
 {
     bool success = false;
@@ -495,6 +517,11 @@ bool IrrigationDataSource::setSettingValue(const QString& key, const QString& va
     query.bindValue(":value", value);
 
     return executeQuery(query);
+}
+
+bool IrrigationDataSource::isMasterEnabled()
+{
+    return settingValue("master_enabled") != "0";
 }
 
 QSqlQuery IrrigationDataSource::rawQuery(const QString& sql, bool* ok)

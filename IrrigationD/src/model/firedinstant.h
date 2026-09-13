@@ -16,7 +16,9 @@ public:
         Ran,
         SkippedBusy,
         SkippedRain,
-        Missed
+        Missed,
+        SkippedStop,
+        Failed
     };
 
     /** @brief Parses @p value into an Outcome. Returns Missed when unrecognised. */
@@ -44,6 +46,8 @@ private:
             insert(Outcome::SkippedBusy, "skipped_busy");
             insert(Outcome::SkippedRain, "skipped_rain");
             insert(Outcome::Missed,      "missed");
+            insert(Outcome::SkippedStop, "skipped_stop");
+            insert(Outcome::Failed,      "failed");
         }
     };
 

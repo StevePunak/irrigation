@@ -79,6 +79,9 @@ public:
     /** @brief Returns true when a firing already exists for this program, start time and instant. */
     bool hasFired(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
 
+    /** @brief Updates the outcome of an existing firing, addressed by its program, start time and instant. @return True when exactly one row changed. */
+    bool setFiringOutcome(int programId, int startTimeId, const QDateTime& scheduledAtUtc, FiredInstant::Outcome outcome);
+
     /** @brief Deletes fired instants scheduled before @p cutoffUtc. @return True on success. */
     bool pruneFiredInstantsOlderThan(const QDateTime& cutoffUtc);
 
@@ -87,6 +90,9 @@ public:
 
     /** @brief Sets the value stored for @p key, inserting or replacing it. @return True on success. */
     bool setSettingValue(const QString& key, const QString& value);
+
+    /** @brief Returns whether the master enable permits water, disabled only on the exact stored value "0". */
+    bool isMasterEnabled();
 
     /** @brief Public passthrough to executeQuery(). */
     QSqlQuery rawQuery(const QString& sql, bool* ok);

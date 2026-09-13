@@ -55,27 +55,19 @@ public:
     /** @brief Returns the text of the most recent failure. */
     QString errorText() const { return _errorText; }
 
-public slots:
-    /** @brief Stops any running program and closes every zone. */
-    void onStopPressed();
-
-    /** @brief Starts @p programId, or records it as skipped when another program is already running. */
-    void onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
-
 protected:
     virtual void threadStarted() override;
     virtual void threadAboutToFinish() override;
 
 private slots:
+    void onStopPressed();
+    void onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
     void onManualZoneRunRequested(int zoneNumber, int seconds);
     void onProgramRunRequested(int programId);
     void publishStatus();
 
 private:
     void connectComponents();
-
-    /** @brief Returns whether the master enable permits water. */
-    bool isMasterEnabled();
 
     /** @brief Returns the earliest UTC instant at which any enabled program is next due. */
     QDateTime nextScheduledRunUtc(const QDateTime& nowUtc);

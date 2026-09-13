@@ -69,7 +69,9 @@ void IrrigationDaemon::threadStarted()
             throw CommonException(QString("Failed to open database '%1': %2")
                                   .arg(_settings->databasePath(), _dataSource->errorText()));
         }
-        _dataSource->pruneFiredInstantsOlderThan(QDateTime::currentDateTimeUtc().addDays(-FiredInstantRetentionDays));
+        if(_dataSource->pruneFiredInstantsOlderThan(QDateTime::currentDateTimeUtc().addDays(-FiredInstantRetentionDays)) == false) {
+            logText(LVL_WARNING, "Failed to prune old fired instants");
+        }
 
         _programRunner = new ProgramRunner(_zoneController, _dataSource);
         _scheduler = new Scheduler(_dataSource, &_clock);
@@ -112,6 +114,14 @@ void IrrigationDaemon::threadAboutToFinish()
 
     delete _statusTimer;
     _statusTimer = nullptr;
+
+    if(_programRunner != nullptr) {
+        _programRunner->abort();
+    }
+    if(_zoneController != nullptr && _zoneController->allOff() == false) {
+        logText(LVL_ERROR, QString("Failed to close the zones during teardown: %1")
+                               .arg(_zoneController->errorText()));
+    }
 
     if(_controlServer != nullptr) {
         // Never deleteLater() an AbstractThreadClass: once stop() returns, the thread
@@ -179,21 +189,25 @@ void IrrigationDaemon::onStopPressed()
 
 void IrrigationDaemon::onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc)
 {
-    if(_programRunner->isRunning()) {
-        logText(LVL_WARNING, QString("Program %1 came due while program %2 is running")
-                                 .arg(programId).arg(_programRunner->runningProgramId()));
-
-        FiredInstant instant;
-        instant.programId = programId;
-        instant.startTimeId = startTimeId;
-        instant.scheduledAtUtc = scheduledAtUtc;
-        instant.outcome = FiredInstant::Outcome::SkippedBusy;
-        if(_dataSource->recordFiring(instant) == false) {
+    if(_stopButton->isHeld()) {
+        logText(LVL_WARNING, QString("Program %1 came due while the stop button is held").arg(programId));
+        if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::SkippedStop) == false) {
+            logText(LVL_ERROR, QString("Failed to record program %1 as skipped").arg(programId));
+        }
+    }
+    else if(_programRunner->isRunning() || _zoneController->openZoneNumber() != 0) {
+        logText(LVL_WARNING, QString("Program %1 came due while zone %2 is busy")
+                                 .arg(programId).arg(_zoneController->openZoneNumber()));
+        if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::SkippedBusy) == false) {
             logText(LVL_ERROR, QString("Failed to record program %1 as skipped").arg(programId));
         }
     }
     else if(_programRunner->startProgram(programId) == false) {
-        logText(LVL_ERROR, QString("Failed to start program %1").arg(programId));
+        logText(LVL_ERROR, QString("Failed to start program %1: %2")
+                               .arg(programId).arg(_zoneController->errorText()));
+        if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::Failed) == false) {
+            logText(LVL_ERROR, QString("Failed to record program %1 as failed").arg(programId));
+        }
     }
 
     publishStatus();
@@ -201,7 +215,10 @@ void IrrigationDaemon::onProgramDue(int programId, int startTimeId, const QDateT
 
 void IrrigationDaemon::onManualZoneRunRequested(int zoneNumber, int seconds)
 {
-    if(isMasterEnabled() == false) {
+    if(_stopButton->isHeld()) {
+        logText(LVL_WARNING, QString("Refused a manual run of zone %1: the stop button is held").arg(zoneNumber));
+    }
+    else if(_dataSource->isMasterEnabled() == false) {
         logText(LVL_WARNING, QString("Refused a manual run of zone %1: the master enable is off").arg(zoneNumber));
     }
     else {
@@ -220,13 +237,20 @@ void IrrigationDaemon::onManualZoneRunRequested(int zoneNumber, int seconds)
 
 void IrrigationDaemon::onProgramRunRequested(int programId)
 {
-    if(isMasterEnabled() == false) {
+    if(_stopButton->isHeld()) {
+        logText(LVL_WARNING, QString("Refused a manual run of program %1: the stop button is held").arg(programId));
+    }
+    else if(_dataSource->isMasterEnabled() == false) {
         logText(LVL_WARNING, QString("Refused a manual run of program %1: the master enable is off").arg(programId));
     }
     else {
+        // abort() precedes startProgram(): startProgram() refuses while a program
+        // is already running, so calling it before abort() drops the request.
+        _programRunner->abort();
+
         if(_programRunner->startProgram(programId) == false) {
-            logText(LVL_ERROR, QString("Failed to start program %1, program %2 is running")
-                                   .arg(programId).arg(_programRunner->runningProgramId()));
+            logText(LVL_ERROR, QString("Failed to start program %1: %2")
+                                   .arg(programId).arg(_zoneController->errorText()));
         }
 
         publishStatus();
@@ -242,17 +266,11 @@ void IrrigationDaemon::publishStatus()
     status.secondsRemaining = _zoneController->secondsRemaining();
     status.nextRunUtc = nextScheduledRunUtc(nowUtc);
     status.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
-    status.masterEnabled = isMasterEnabled();
+    status.masterEnabled = _dataSource->isMasterEnabled();
     status.rainDelayUntilUtc =
         QDateTime::fromString(_dataSource->settingValue("rain_delay_until"), Qt::ISODate).toUTC();
 
     _controlServer->updateStatus(status);
-}
-
-bool IrrigationDaemon::isMasterEnabled()
-{
-    // Scheduler::tick() gates scheduled runs on this exact string.
-    return _dataSource->settingValue("master_enabled") != "0";
 }
 
 QDateTime IrrigationDaemon::nextScheduledRunUtc(const QDateTime& nowUtc)
