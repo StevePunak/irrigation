@@ -44,7 +44,9 @@ export default function App() {
     <div className="app">
       {stale ? (
         <div className="banner" role="status">
-          Not reaching the controller — showing the last known state. {error}
+          {status === null
+            ? `Not reaching the controller. ${error ?? ''}`
+            : `Not reaching the controller — showing the last known state. ${error ?? ''}`}
         </div>
       ) : null}
 

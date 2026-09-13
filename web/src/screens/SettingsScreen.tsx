@@ -1,4 +1,4 @@
-import type { ScreenProps } from './NowScreen'
+import type { ScreenProps } from './screenProps'
 
 export default function SettingsScreen(_props: ScreenProps) {
   return (

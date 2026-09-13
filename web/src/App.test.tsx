@@ -82,6 +82,12 @@ describe('App', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/not reaching the controller/i)
   })
 
+  it('does not claim a last known state when the first poll ever fails', async () => {
+    vi.spyOn(client, 'getStatus').mockRejectedValue(new Error('Failed to fetch'))
+    render(<App />)
+    expect(await screen.findByRole('status')).not.toHaveTextContent(/last known state/i)
+  })
+
   it('hides the banner once the poll recovers', async () => {
     vi.spyOn(client, 'getStatus')
       .mockRejectedValueOnce(new Error('Failed to fetch'))
