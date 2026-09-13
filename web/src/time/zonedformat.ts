@@ -149,19 +149,32 @@ export function formatCountdown(seconds: number): string {
   return `${minutes}:${String(secs).padStart(2, '0')}`
 }
 
+function isValidMinutes(value: number): boolean {
+  return Number.isInteger(value) && value >= 0 && value <= 1439
+}
+
 /**
  * A start time is a wall-clock rule with no instant behind it, so this takes no
  * zone. Converting it through a Date shifts every start time by the host offset.
  */
 export function minutesToClock(minutesAfterMidnight: number): string {
-  const clamped = Math.max(0, Math.min(1439, Math.floor(minutesAfterMidnight)))
-  return clockFromHourMinute(Math.floor(clamped / 60), clamped % 60)
+  if (isValidMinutes(minutesAfterMidnight) === false) {
+    return INVALID_ZONE_MARKER
+  }
+  return clockFromHourMinute(Math.floor(minutesAfterMidnight / 60), minutesAfterMidnight % 60)
 }
 
-/** Formats wall-clock minutes for an `<input type="time">` value. */
+/**
+ * Formats wall-clock minutes for an `<input type="time">` value. Falls back to
+ * midnight on invalid input because the input element requires a well-formed
+ * value; pair this with a sibling display using INVALID_ZONE_MARKER to surface
+ * the failure.
+ */
 export function minutesToInputValue(minutesAfterMidnight: number): string {
-  const clamped = Math.max(0, Math.min(1439, Math.floor(minutesAfterMidnight)))
-  return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`
+  if (isValidMinutes(minutesAfterMidnight) === false) {
+    return '00:00'
+  }
+  return `${String(Math.floor(minutesAfterMidnight / 60)).padStart(2, '0')}:${String(minutesAfterMidnight % 60).padStart(2, '0')}`
 }
 
 /** Parses an `<input type="time">` value. Returns -1 when it will not parse. */

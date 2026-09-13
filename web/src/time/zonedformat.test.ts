@@ -67,6 +67,16 @@ describe('formatDayAndClock', () => {
   it('adds the date beyond a week out', () => {
     expect(formatDayAndClock('2026-09-28T13:00:00Z', LA, now)).toBe('Mon 28 Sep 6:00 AM')
   })
+
+  it('computes the day gap from calendar fields across a DST transition', () => {
+    // 2026-11-01 is when America/Los_Angeles falls back from PDT to PST.
+    // now: Oct 31 7:00 PM local (still PDT). target: Nov 6 6:00 PM local
+    // (already PST), six calendar days later. A raw millisecond gap between
+    // local midnights would cross the one-hour fallback and risk rounding to
+    // the wrong day count; the calendar-field gap must not.
+    const dstNow = Date.parse('2026-11-01T02:00:00Z')
+    expect(formatDayAndClock('2026-11-07T02:00:00Z', LA, dstNow)).toBe('Fri 6:00 PM')
+  })
 })
 
 describe('formatDuration', () => {
@@ -114,5 +124,12 @@ describe('wall-clock minutes', () => {
     expect(inputValueToMinutes('')).toBe(-1)
     expect(inputValueToMinutes('25:00')).toBe(-1)
     expect(inputValueToMinutes('12:60')).toBe(-1)
+  })
+
+  it('marks rather than launders an out-of-range or NaN minute value', () => {
+    expect(minutesToClock(-1)).toBe(INVALID_ZONE_MARKER)
+    expect(minutesToClock(NaN)).toBe(INVALID_ZONE_MARKER)
+    expect(minutesToInputValue(-1)).toBe('00:00')
+    expect(minutesToInputValue(NaN)).toBe('00:00')
   })
 })

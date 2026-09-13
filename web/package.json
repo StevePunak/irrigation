@@ -8,8 +8,9 @@
     "build": "tsc --noEmit && vite build && node scripts/checkBundle.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "TZ=UTC vitest run",
-    "test:watch": "TZ=UTC vitest"
+    "test": "TZ=UTC vitest run && npm run test:wallclock",
+    "test:watch": "TZ=UTC vitest",
+    "test:wallclock": "TZ=America/Los_Angeles vitest run --config vitest.wallclock.config.ts"
   },
   "dependencies": {
     "react": "^19.1.0",
