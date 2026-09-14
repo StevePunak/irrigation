@@ -69,15 +69,12 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime, const QDate
 
     const QTime localTime = QTime(0, 0).addSecs(startTime.minutesAfterMidnight * 60);
 
-    QDateTime rejected(localDate, localTime, zone, QDateTime::TransitionResolution::Reject);
-    if(rejected.isValid() == false) {
-        return QDateTime();
-    }
-
-    // PreferBefore alone still returns a valid instant inside a spring-forward gap by
-    // sliding to an adjacent time.
+    // PreferBefore resolves a fall-back repeat to its earlier offset without moving the
+    // wall clock, but slides a spring-forward gap to an adjacent valid wall-clock time.
+    // Comparing the resolved date and time against what was requested is what tells a
+    // gap apart from a fold.
     QDateTime resolved(localDate, localTime, zone, QDateTime::TransitionResolution::PreferBefore);
-    if(resolved.isValid() == false) {
+    if(resolved.isValid() == false || resolved.date() != localDate || resolved.time() != localTime) {
         return QDateTime();
     }
 
