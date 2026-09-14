@@ -314,6 +314,7 @@ private slots:
     void programPostAcceptsDaysOfWeekWithAllSevenDaysBit();
     void programPostRejectsAnUnknownSecondZoneId();
     void programPostAcceptsAZoneIdThatDiffersFromItsRenumberedZoneNumber();
+    void programPostAnswers500WhenCommitFailsWritingNothing();
 
     void programPutUnknownIdReturns404();
     void programPutValidationRejectsAndPreservesEverything_data();
@@ -330,6 +331,9 @@ private slots:
     void programPutStartTimesSharingMinutesDifferingTimezoneReconcileIndependently();
     void programPutStoredDuplicateStartTimesShrinkToOneKeepingTheFirstId();
     void programPutAnswers500WhenCommitFailsLeavingOriginalDataIntact();
+    void programPutAnswers500WhenAStartTimeInsertFailsLeavingOriginalDataIntact();
+
+    void programsGetReportsEmptyNextRunUtcForADisabledProgram();
 
     void programDeleteRemovesProgramCascadingStartTimesAndZonesLeavesOtherProgramsIntact();
     void programDeleteUnknownIdReturns404();
@@ -1196,7 +1200,7 @@ void TestControlServer::programsGetReturnsFieldsStartTimesZonesAndPerProgramNext
     QTemporaryDir dir;
     const QString dbPath = dir.filePath("irrigation.db");
 
-    // Computed from the real clock, never from Scheduler::nextRunUtc: an anchor 30 days out
+    // The expected value must not come from Scheduler::nextRunUtc. An anchor 30 days out
     // stays inside the 366-day horizon and ahead of "today" at any point this case runs.
     const QDate anchor = QDateTime::currentDateTimeUtc().date().addDays(30);
 
@@ -1208,8 +1212,7 @@ void TestControlServer::programsGetReturnsFieldsStartTimesZonesAndPerProgramNext
     program.intervalDays = 1;
     program.anchorDate = anchor;
 
-    // Inserted out of time order: the later time gets the lower id, so a GET that computed
-    // nextRunUtc from only the first (lowest-id) start time would answer with the later time.
+    // Inserted out of time order: the later time must keep the lower id.
     ProgramStartTime late;
     late.minutesAfterMidnight = 1000;
     late.timezone = "UTC";
@@ -1429,8 +1432,7 @@ void TestControlServer::programPostValidationRejectsAndWritesNothing()
     const QJsonArray array = QJsonDocument::fromJson(getReply->readAll()).array();
     QCOMPARE(array.count(), 0);
 
-    // The connection must still accept a transaction: a validator that runs after BEGIN
-    // and returns 400 without a rollback leaves every later write answering 500.
+    // The second write must follow the rejection on this same server.
     QNetworkReply* secondReply = postJson(manager, server.boundPort(), "/admin/programs",
                                           QJsonDocument(baseValidProgramBody()).toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(secondReply), 201);
@@ -1501,7 +1503,8 @@ void TestControlServer::programPostMalformedBodyReturns400AndWritesNothing()
 void TestControlServer::programPostAcceptsOddDayMode()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
     QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
@@ -1509,15 +1512,25 @@ void TestControlServer::programPostAcceptsOddDayMode()
                                     QJsonDocument(withProgramField(baseValidProgramBody(), "root", "dayMode", "Odd"))
                                         .toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(reply), 201);
-    QCOMPARE(QJsonDocument::fromJson(reply->readAll()).object().value("dayMode").toString(), QString("Odd"));
+    const QJsonObject postBody = QJsonDocument::fromJson(reply->readAll()).object();
+    const int programId = postBody.value("id").toInt();
+    QCOMPARE(postBody.value("dayMode").toString(), QString("Odd"));
 
-    server.stop(TimeSpan::fromSeconds(5));
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    const ProgramList programs = verify.allPrograms();
+    QCOMPARE(programs.count(), 1);
+    QCOMPARE(programs.at(0).id, programId);
+    QCOMPARE(programs.at(0).dayMode, Program::DayMode::Odd);
 }
 
 void TestControlServer::programPostAcceptsEvenDayMode()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
     QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
@@ -1525,15 +1538,25 @@ void TestControlServer::programPostAcceptsEvenDayMode()
                                     QJsonDocument(withProgramField(baseValidProgramBody(), "root", "dayMode", "Even"))
                                         .toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(reply), 201);
-    QCOMPARE(QJsonDocument::fromJson(reply->readAll()).object().value("dayMode").toString(), QString("Even"));
+    const QJsonObject postBody = QJsonDocument::fromJson(reply->readAll()).object();
+    const int programId = postBody.value("id").toInt();
+    QCOMPARE(postBody.value("dayMode").toString(), QString("Even"));
 
-    server.stop(TimeSpan::fromSeconds(5));
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    const ProgramList programs = verify.allPrograms();
+    QCOMPARE(programs.count(), 1);
+    QCOMPARE(programs.at(0).id, programId);
+    QCOMPARE(programs.at(0).dayMode, Program::DayMode::Even);
 }
 
 void TestControlServer::programPostAcceptsEveryNDaysWithIntervalOne()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
     QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
@@ -1542,17 +1565,28 @@ void TestControlServer::programPostAcceptsEveryNDaysWithIntervalOne()
     QCOMPARE(statusCode(reply), 201);
 
     const QJsonObject body = QJsonDocument::fromJson(reply->readAll()).object();
+    const int programId = body.value("id").toInt();
     QCOMPARE(body.value("dayMode").toString(), QString("EveryNDays"));
     QCOMPARE(body.value("intervalDays").toInt(), 1);
     QCOMPARE(body.value("anchorDate").toString(), QString("2027-01-01"));
 
-    server.stop(TimeSpan::fromSeconds(5));
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    const ProgramList programs = verify.allPrograms();
+    QCOMPARE(programs.count(), 1);
+    QCOMPARE(programs.at(0).id, programId);
+    QCOMPARE(programs.at(0).dayMode, Program::DayMode::EveryNDays);
+    QCOMPARE(programs.at(0).intervalDays, 1);
+    QCOMPARE(programs.at(0).anchorDate, QDate(2027, 1, 1));
 }
 
 void TestControlServer::programPostAcceptsDaysOfWeekWithAllSevenDaysBit()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
     QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
@@ -1560,9 +1594,18 @@ void TestControlServer::programPostAcceptsDaysOfWeekWithAllSevenDaysBit()
                                     QJsonDocument(withProgramField(baseValidProgramBody(), "root", "dowMask", 127))
                                         .toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(reply), 201);
-    QCOMPARE(QJsonDocument::fromJson(reply->readAll()).object().value("dowMask").toInt(), 127);
+    const QJsonObject postBody = QJsonDocument::fromJson(reply->readAll()).object();
+    const int programId = postBody.value("id").toInt();
+    QCOMPARE(postBody.value("dowMask").toInt(), 127);
 
-    server.stop(TimeSpan::fromSeconds(5));
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    const ProgramList programs = verify.allPrograms();
+    QCOMPARE(programs.count(), 1);
+    QCOMPARE(programs.at(0).id, programId);
+    QCOMPARE(programs.at(0).dowMask, 127);
 }
 
 void TestControlServer::programPostRejectsAnUnknownSecondZoneId()
@@ -1597,7 +1640,6 @@ void TestControlServer::programPostAcceptsAZoneIdThatDiffersFromItsRenumberedZon
     QTemporaryDir dir;
     const QString dbPath = dir.filePath("irrigation.db");
     // Zone id 1 is renumbered to 99: no zone's NUMBER is 1, but zone id 1 still exists.
-    // A zoneId validator keyed on number would reject zoneId 1; one keyed on id accepts it.
     seedRenumberedZone(dbPath, 99, true);
 
     IrrigationControlServer server(dbPath);
@@ -1610,6 +1652,69 @@ void TestControlServer::programPostAcceptsAZoneIdThatDiffersFromItsRenumberedZon
     QCOMPARE(statusCode(reply), 201);
     QCOMPARE(QJsonDocument::fromJson(reply->readAll()).object()
                  .value("zones").toArray().at(0).toObject().value("zoneId").toInt(), 1);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
+void TestControlServer::programPostAnswers500WhenCommitFailsWritingNothing()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    // A deferred foreign key, tripped from an AFTER INSERT trigger, makes COMMIT itself fail.
+    {
+        IrrigationDataSource trigger(dbPath);
+        QVERIFY(trigger.open());
+        bool ok = false;
+        trigger.rawQuery(
+            "CREATE TABLE commit_poison (program_ref INTEGER REFERENCES programs(id) "
+            "DEFERRABLE INITIALLY DEFERRED)",
+            &ok);
+        QVERIFY(ok);
+        trigger.rawQuery(
+            "CREATE TRIGGER poison_commit AFTER INSERT ON program_zones "
+            "WHEN NEW.duration_seconds = 777777 "
+            "BEGIN INSERT INTO commit_poison VALUES (-1); END;",
+            &ok);
+        QVERIFY(ok);
+    }
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    const QJsonObject body{
+        { "name", "Commit Attempt" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 777777 } } } }
+    };
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/programs",
+                                    QJsonDocument(body).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(reply), 500);
+
+    // Read back on the server's own connection while it is still running: a POST failure path
+    // that skips rollbackTransaction() would serve the orphaned program row here, even though
+    // a read after stop() would not.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    QCOMPARE(QJsonDocument::fromJson(getReply->readAll()).array().count(), 0);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        QCOMPARE(verify.allPrograms().count(), 0);
+    }
+
+    // The connection must still accept a transaction: a left-open transaction answers 500 here.
+    const QJsonObject validBody{
+        { "name", "Good" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = postJson(manager, server.boundPort(), "/admin/programs",
+                                          QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 201);
 
     server.stop(TimeSpan::fromSeconds(5));
 }
@@ -1998,6 +2103,13 @@ void TestControlServer::programPutReorderedIdenticalStartTimesKeepsIds()
                                    QJsonDocument(requestBody).toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(reply), 200);
 
+    // The response lists start times in id order, the opposite of the wire order sent above.
+    const QJsonArray responseStartTimes = QJsonDocument::fromJson(reply->readAll()).object()
+                                               .value("startTimes").toArray();
+    QCOMPARE(responseStartTimes.count(), 2);
+    QCOMPARE(responseStartTimes.at(0).toObject().value("id").toInt(), idE);
+    QCOMPARE(responseStartTimes.at(1).toObject().value("id").toInt(), idF);
+
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
 
     IrrigationDataSource verify(dbPath);
@@ -2189,6 +2301,7 @@ void TestControlServer::programPutStoresEveryMutableProgramField()
     program.name = "Before";
     program.enabled = true;
     program.dayMode = Program::DayMode::Odd;
+    program.dowMask = 9;
     QList<ProgramStartTime> startTimes{};
     QList<ProgramZone> zones{};
     QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
@@ -2198,7 +2311,7 @@ void TestControlServer::programPutStoresEveryMutableProgramField()
 
     QNetworkAccessManager manager;
     const QJsonObject body{
-        { "name", "After" }, { "enabled", false }, { "dayMode", "EveryNDays" }, { "dowMask", 0 },
+        { "name", "After" }, { "enabled", false }, { "dayMode", "EveryNDays" }, { "dowMask", 42 },
         { "intervalDays", 1 }, { "anchorDate", "2027-02-03" },
         { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 610 }, { "timezone", "UTC" } } } },
         { "zones", QJsonArray{} }
@@ -2212,6 +2325,7 @@ void TestControlServer::programPutStoresEveryMutableProgramField()
     QCOMPARE(response.value("name").toString(), QString("After"));
     QCOMPARE(response.value("enabled").toBool(), false);
     QCOMPARE(response.value("dayMode").toString(), QString("EveryNDays"));
+    QCOMPARE(response.value("dowMask").toInt(), 42);
     QCOMPARE(response.value("intervalDays").toInt(), 1);
     QCOMPARE(response.value("anchorDate").toString(), QString("2027-02-03"));
 
@@ -2225,6 +2339,7 @@ void TestControlServer::programPutStoresEveryMutableProgramField()
     QCOMPARE(programs.at(0).name, QString("After"));
     QCOMPARE(programs.at(0).enabled, false);
     QCOMPARE(programs.at(0).dayMode, Program::DayMode::EveryNDays);
+    QCOMPARE(programs.at(0).dowMask, 42);
     QCOMPARE(programs.at(0).intervalDays, 1);
     QCOMPARE(programs.at(0).anchorDate, QDate(2027, 2, 3));
 
@@ -2304,9 +2419,7 @@ void TestControlServer::programPutStartTimesSharingMinutesDifferingTimezoneRecon
     IrrigationControlServer server(dbPath);
     QVERIFY(startServerOnLoopback(server));
 
-    // Only the LA entry is sent back: a reconcile that matches on minutes alone (ignoring
-    // timezone) can match it against the UTC row instead, keeping the wrong row and
-    // deleting the one the caller actually kept.
+    // Only the LA entry is sent back.
     const QJsonObject body{
         { "name", "SharedMinutes" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 5 },
         { "intervalDays", 0 }, { "anchorDate", "" },
@@ -2394,8 +2507,7 @@ void TestControlServer::programPutAnswers500WhenCommitFailsLeavingOriginalDataIn
     const int originalStartTimeId = startTimes.at(0).id;
     const int originalZoneEntryId = zones.at(0).id;
 
-    // A deferred foreign key, tripped from an AFTER INSERT trigger, makes COMMIT itself
-    // fail -- a different failure point than the BEFORE INSERT abort the rollback case uses.
+    // A deferred foreign key, tripped from an AFTER INSERT trigger, makes COMMIT itself fail.
     {
         IrrigationDataSource trigger(dbPath);
         QVERIFY(trigger.open());
@@ -2427,15 +2539,157 @@ void TestControlServer::programPutAnswers500WhenCommitFailsLeavingOriginalDataIn
                                    QString("/admin/programs/%1").arg(program.id),
                                    QJsonDocument(body).toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(reply), 500);
-    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
 
-    IrrigationDataSource verify(dbPath);
-    QVERIFY(verify.open());
-    const ProgramList programs = verify.allPrograms();
-    QCOMPARE(programs.count(), 1);
-    QCOMPARE(programs.at(0).name, QString("Commit"));
-    QCOMPARE(verify.startTimesFor(program.id).at(0).id, originalStartTimeId);
-    QCOMPARE(verify.zonesFor(program.id).at(0).id, originalZoneEntryId);
+    // Read back on the server's own connection while it is still running: a commit-failure
+    // path that skips rollbackTransaction() would show "Commit Attempt" here, even though a
+    // read after stop() would not (closing the connection rolls back whatever was left open).
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject got = QJsonDocument::fromJson(getReply->readAll()).array().at(0).toObject();
+    QCOMPARE(got.value("name").toString(), QString("Commit"));
+    QCOMPARE(got.value("startTimes").toArray().count(), 1);
+    QCOMPARE(got.value("startTimes").toArray().at(0).toObject().value("id").toInt(), originalStartTimeId);
+    QCOMPARE(got.value("zones").toArray().count(), 1);
+    QCOMPARE(got.value("zones").toArray().at(0).toObject().value("id").toInt(), originalZoneEntryId);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        const ProgramList programs = verify.allPrograms();
+        QCOMPARE(programs.count(), 1);
+        QCOMPARE(programs.at(0).name, QString("Commit"));
+        QCOMPARE(verify.startTimesFor(program.id).at(0).id, originalStartTimeId);
+        QCOMPARE(verify.zonesFor(program.id).at(0).id, originalZoneEntryId);
+    }
+
+    // The connection must still accept a transaction: a left-open transaction answers 500 here.
+    const QJsonObject validBody{
+        { "name", "After" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = putJson(manager, server.boundPort(),
+                                         QString("/admin/programs/%1").arg(program.id),
+                                         QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 200);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programPutAnswers500WhenAStartTimeInsertFailsLeavingOriginalDataIntact()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    Program program;
+    program.name = "Reconcile Fail";
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 3;
+    ProgramStartTime original;
+    original.minutesAfterMidnight = 400;
+    original.timezone = "UTC";
+    QList<ProgramStartTime> startTimes{ original };
+    ProgramZone zone;
+    zone.zoneId = 8;
+    zone.sequence = 0;
+    zone.durationSeconds = 111;
+    QList<ProgramZone> zones{ zone };
+    QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
+    const int originalStartTimeId = startTimes.at(0).id;
+
+    // The changed minutes force reconcileStartTimes to delete the original row and insert a
+    // new one; the trigger aborts that insert.
+    {
+        IrrigationDataSource trigger(dbPath);
+        QVERIFY(trigger.open());
+        bool ok = false;
+        trigger.rawQuery(
+            "CREATE TRIGGER reject_poison_start_time BEFORE INSERT ON program_start_times "
+            "WHEN NEW.minutes_after_midnight = 1234 "
+            "BEGIN SELECT RAISE(ABORT, 'poison start time insert'); END;",
+            &ok);
+        QVERIFY(ok);
+    }
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    const QJsonObject body{
+        { "name", "Reconcile Attempt" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 1234 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 222 } } } }
+    };
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = putJson(manager, server.boundPort(),
+                                   QString("/admin/programs/%1").arg(program.id),
+                                   QJsonDocument(body).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(reply), 500);
+
+    // Read back on the server's own connection while it is still running: a handler that
+    // ignores reconcileStartTimes()'s failure would commit the delete with 200 and serve the
+    // program with its start time missing.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject got = QJsonDocument::fromJson(getReply->readAll()).array().at(0).toObject();
+    QCOMPARE(got.value("name").toString(), QString("Reconcile Fail"));
+    QCOMPARE(got.value("startTimes").toArray().count(), 1);
+    QCOMPARE(got.value("startTimes").toArray().at(0).toObject().value("id").toInt(), originalStartTimeId);
+    QCOMPARE(got.value("startTimes").toArray().at(0).toObject().value("minutesAfterMidnight").toInt(), 400);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        const ProgramStartTimeList verifyStartTimes = verify.startTimesFor(program.id);
+        QCOMPARE(verifyStartTimes.count(), 1);
+        QCOMPARE(verifyStartTimes.at(0).id, originalStartTimeId);
+        QCOMPARE(verifyStartTimes.at(0).minutesAfterMidnight, 400);
+    }
+
+    // The connection must still accept a transaction: a left-open transaction answers 500 here.
+    const QJsonObject validBody{
+        { "name", "After" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = putJson(manager, server.boundPort(),
+                                         QString("/admin/programs/%1").arg(program.id),
+                                         QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 200);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programsGetReportsEmptyNextRunUtcForADisabledProgram()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    Program program;
+    program.name = "Disabled";
+    program.enabled = false;
+    program.dayMode = Program::DayMode::EveryNDays;
+    program.intervalDays = 1;
+    program.anchorDate = QDateTime::currentDateTimeUtc().date().addDays(30);
+    ProgramStartTime startTime;
+    startTime.minutesAfterMidnight = 360;
+    startTime.timezone = "UTC";
+    QList<ProgramStartTime> startTimes{ startTime };
+    QList<ProgramZone> zones{};
+    QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonArray array = QJsonDocument::fromJson(reply->readAll()).array();
+    QCOMPARE(array.count(), 1);
+    const QJsonObject body = array.at(0).toObject();
+    QCOMPARE(body.value("enabled").toBool(), false);
+    QCOMPARE(body.value("nextRunUtc").toString(), QString(""));
+
+    server.stop(TimeSpan::fromSeconds(5));
 }
 
 void TestControlServer::programDeleteRemovesProgramCascadingStartTimesAndZonesLeavesOtherProgramsIntact()
@@ -2444,8 +2698,7 @@ void TestControlServer::programDeleteRemovesProgramCascadingStartTimesAndZonesLe
     const QString dbPath = dir.filePath("irrigation.db");
 
     // A filler program, created and deleted first, gives doomed and survivor ids that do
-    // not equal their list position + 1: a delete keyed by position would act on the wrong
-    // program once any earlier program is gone.
+    // not equal their list position + 1.
     {
         IrrigationDataSource seed(dbPath);
         QVERIFY(seed.open());
