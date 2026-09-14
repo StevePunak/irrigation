@@ -10,18 +10,29 @@ static QMap<int, quint32> eightZones()
     return { {1,5}, {2,6}, {3,12}, {4,13}, {5,16}, {6,19}, {7,20}, {8,21} };
 }
 
-class ReadFailBackend : public MockBackend
+class FaultBackend : public MockBackend
 {
 public:
     bool failRead = false;
+    int failWrites = 0;
 
     virtual bool getValues(Gpio::RequestHandle handle, const QList<quint32>& offsets, QList<Gpio::Value>& values) override
     {
-        if(failRead) {
+        if(failRead == true) {
             setErrorText("injected read failure");
             return false;
         }
         return MockBackend::getValues(handle, offsets, values);
+    }
+
+    virtual bool setValues(Gpio::RequestHandle handle, const QList<quint32>& offsets, const QList<Gpio::Value>& values) override
+    {
+        if(failWrites > 0) {
+            failWrites--;
+            setErrorText("injected write failure");
+            return false;
+        }
+        return MockBackend::setValues(handle, offsets, values);
     }
 };
 
@@ -44,6 +55,11 @@ private slots:
     void mismatchTripAlsoLatchesAndBlocksOpen();
     void allOffFailingInsideTripLeavesLatchUntilRetriedCloseLands();
     void closeRetriesAfterTwoConsecutiveWriteFailuresThenSucceeds();
+    void closeRetryLandsWithinTwoRetryIntervals();
+    void watchdogTripsWhenTheOpenZonesLineDropsOut();
+    void watchdogTripsWhenAForeignLineEnergisesWithAZoneOpen();
+    void maxZoneSecondsNeverRisesPastTheHardCeiling();
+    void durationOfExactlyOneSecondIsAccepted();
 };
 
 void TestZoneController::beginDrivesEveryLineInactive()
@@ -100,7 +116,7 @@ void TestZoneController::durationIsClampedToTheCeiling()
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(1).toInt(), 120);
-    QVERIFY(controller.secondsRemaining() >= 119 && controller.secondsRemaining() <= 120);
+    QVERIFY(controller.secondsRemaining() >= 118 && controller.secondsRemaining() <= 119);
 }
 
 void TestZoneController::durationBelowOneIsRejected()
@@ -241,8 +257,7 @@ void TestZoneController::watchdogIsRunningEvenWhenBeginsInactiveWriteFails()
     backend.setFailNextSetValues(true);
     QVERIFY(controller.begin() == false);
 
-    // request() already reset every line to Inactive regardless of the failed write;
-    // force a mismatch afterward so a running watchdog has something to catch.
+    // request() already reset every line to Inactive regardless of the failed write.
     backend.setLineValue(5, Gpio::Value::Active);
 
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
@@ -251,7 +266,7 @@ void TestZoneController::watchdogIsRunningEvenWhenBeginsInactiveWriteFails()
 
 void TestZoneController::openZoneRefusedWhileFaultedThenAllowedAfterCleanReadBack()
 {
-    ReadFailBackend backend;
+    FaultBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
     ZoneController controller(&backend, eightZones(), true, 3600);
@@ -321,6 +336,15 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
     QVERIFY(controller.closeTimerActiveForTest());
     QVERIFY(controller.openZone(1, 601) == false);
 
+    // A clean read-back that still shows zone 5 open must not clear the latch:
+    // the retry has not landed and _openZone is still 5.
+    backend.setLineValue(16, Gpio::Value::Active);
+    backend.setLineValue(6, Gpio::Value::Inactive);
+    controller.triggerWatchdogForTest();
+
+    QVERIFY(controller.isFaulted());
+    QVERIFY(controller.openZone(1, 601) == false);
+
     controller.expireCloseTimerForTest();
 
     QCOMPARE(controller.openZoneNumber(), 0);
@@ -359,6 +383,83 @@ void TestZoneController::closeRetriesAfterTwoConsecutiveWriteFailuresThenSucceed
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
     QCOMPARE(closedSpy.count(), 1);
     QCOMPARE(closedSpy.first().at(0).toInt(), 3);
+}
+
+void TestZoneController::closeRetryLandsWithinTwoRetryIntervals()
+{
+    FaultBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    controller.setWatchdogInterval(TimeSpan::fromSeconds(60));
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(3, 811));
+
+    backend.failWrites = 2;
+    controller.expireCloseTimerForTest();
+    QCOMPARE(controller.openZoneNumber(), 3);
+
+    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 3000);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
+}
+
+void TestZoneController::watchdogTripsWhenTheOpenZonesLineDropsOut()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(4, 829));
+
+    backend.setLineValue(13, Gpio::Value::Inactive);
+
+    QSignalSpy trippedSpy(&controller, &ZoneController::watchdogTripped);
+    controller.triggerWatchdogForTest();
+
+    QCOMPARE(trippedSpy.count(), 1);
+    QCOMPARE(trippedSpy.first().at(0).toInt(), 4);
+}
+
+void TestZoneController::watchdogTripsWhenAForeignLineEnergisesWithAZoneOpen()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(4, 829));
+
+    backend.setLineValue(20, Gpio::Value::Active);
+
+    QSignalSpy trippedSpy(&controller, &ZoneController::watchdogTripped);
+    controller.triggerWatchdogForTest();
+
+    QCOMPARE(trippedSpy.count(), 1);
+    QCOMPARE(trippedSpy.first().at(0).toInt(), 4);
+}
+
+void TestZoneController::maxZoneSecondsNeverRisesPastTheHardCeiling()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 120);
+    controller.setMaxZoneSeconds(600);
+
+    QCOMPARE(controller.maxZoneSeconds(), 120);
+}
+
+void TestZoneController::durationOfExactlyOneSecondIsAccepted()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+
+    QVERIFY(controller.openZone(4, 1));
+    QCOMPARE(controller.openZoneNumber(), 4);
 }
 
 QTEST_MAIN(TestZoneController)

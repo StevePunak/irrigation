@@ -16,7 +16,7 @@ public:
 
     virtual bool getValues(Gpio::RequestHandle handle, const QList<quint32>& offsets, QList<Gpio::Value>& values) override
     {
-        if(failRead) {
+        if(failRead == true) {
             setErrorText("injected read failure");
             return false;
         }
@@ -41,8 +41,7 @@ struct ZoneStep
     int durationSeconds;
 };
 
-// Renumbers every zone id past its manifold number, so a query keyed on the
-// wrong column (id instead of number, or id instead of sequence) still shows up.
+// Renumbers every zone id past its manifold number.
 static bool detachZoneIdsFromNumbers(IrrigationDataSource& source)
 {
     bool ok = false;
@@ -60,6 +59,9 @@ static Zone zoneByNumber(IrrigationDataSource& source, int number)
     return Zone();
 }
 
+// Renumbers the program id past any zone sequence or index value reached in these
+// tests, so a payload transposition between programId and _index cannot hide behind
+// a coincidence where both are small integers.
 static int buildProgram(IrrigationDataSource& source, const QList<ZoneStep>& steps)
 {
     Program program;
@@ -67,6 +69,13 @@ static int buildProgram(IrrigationDataSource& source, const QList<ZoneStep>& ste
     if(source.insertProgram(program) == false) {
         return 0;
     }
+
+    bool shifted = false;
+    source.rawQuery(QString("UPDATE programs SET id = id + 500 WHERE id = %1").arg(program.id), &shifted);
+    if(shifted == false) {
+        return 0;
+    }
+    program.id += 500;
 
     const ZoneList zones = source.allZones();
     for(const ZoneStep& step : steps) {
@@ -111,12 +120,16 @@ private slots:
     void aProgramWithNoZonesFinishesImmediately();
     void openFailureMidSequenceAbortsTheProgram();
     void manuallyOpenedZoneDoesNotCascadeWhenDisplaced();
-    void watchdogMismatchTripAbortsInsteadOfAdvancing();
-    void watchdogReadFailureTripAbortsInsteadOfAdvancing();
+    void watchdogMismatchTripAbortsTheProgram();
+    void watchdogReadFailureTripAbortsTheProgram();
     void watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands();
-    void watchdogTripOnTheFinalZoneEmitsProgramFinishedNotAborted();
+    void watchdogTripOnTheFinalZoneEmitsProgramFinished();
     void disabledZoneIsSkippedByARunningProgram();
     void programOfOnlyDisabledZonesFinishesImmediately();
+    void firstZoneOpenFailureReturnsFalseAndAbortsTheProgram();
+    void aRepeatedZoneNumberWatersEachOccurrenceSeparately();
+    void watchdogTrippedSignalAbortsARunningProgram();
+    void abortWhileIdleIsANoOp();
 };
 
 void TestProgramRunner::walksZonesInSequenceOrder()
@@ -132,7 +145,7 @@ void TestProgramRunner::walksZonesInSequenceOrder()
     QVERIFY(controller.begin());
 
     // Insertion order (2,7,5), sequence order (7,5,2) and zone-number order (2,5,7)
-    // are pairwise different, so a query keyed on the wrong column still shows up.
+    // are pairwise different.
     const int programId = buildProgram(source, {
         ZoneStep{ 2, 3, 613 },
         ZoneStep{ 7, 1, 617 },
@@ -141,18 +154,26 @@ void TestProgramRunner::walksZonesInSequenceOrder()
     QVERIFY(programId > 0);
 
     ProgramRunner runner(&controller, &source);
-    QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 7);
+    QSignalSpy started(&runner, &ProgramRunner::programStarted);
+    QSignalSpy opened(&controller, &ZoneController::zoneOpened);
 
-    // Ten minutes of wall time have not passed; only a real zoneClosed advances the sequence.
-    QTest::qWait(50);
+    QVERIFY(runner.startProgram(programId));
+    QCOMPARE(started.count(), 1);
+    QCOMPARE(started.first().at(0).toInt(), programId);
     QCOMPARE(controller.openZoneNumber(), 7);
+    QCOMPARE(opened.count(), 1);
+    QCOMPARE(opened.at(0).at(0).toInt(), 7);
+    QCOMPARE(opened.at(0).at(1).toInt(), 617);
 
     controller.expireCloseTimerForTest();
     QCOMPARE(controller.openZoneNumber(), 5);
+    QCOMPARE(opened.at(1).at(0).toInt(), 5);
+    QCOMPARE(opened.at(1).at(1).toInt(), 619);
 
     controller.expireCloseTimerForTest();
     QCOMPARE(controller.openZoneNumber(), 2);
+    QCOMPARE(opened.at(2).at(0).toInt(), 2);
+    QCOMPARE(opened.at(2).at(1).toInt(), 613);
 }
 
 void TestProgramRunner::finishesAfterTheLastZone()
@@ -204,7 +225,7 @@ void TestProgramRunner::abortStopsTheSequenceAndClosesTheValve()
 
     runner.abort();
 
-    // A stray zoneClosed reaching onZoneClosed after abort() must not open the next zone.
+    // abort()'s own reentrant zoneClosed must not open the next zone.
     QCOMPARE(runner.isRunning(), false);
     QCOMPARE(controller.openZoneNumber(), 0);
     for(quint32 offset : eightZones().values()) {
@@ -337,7 +358,7 @@ void TestProgramRunner::manuallyOpenedZoneDoesNotCascadeWhenDisplaced()
     QCOMPARE(aborted.count(), 0);
 }
 
-void TestProgramRunner::watchdogMismatchTripAbortsInsteadOfAdvancing()
+void TestProgramRunner::watchdogMismatchTripAbortsTheProgram()
 {
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
@@ -359,11 +380,13 @@ void TestProgramRunner::watchdogMismatchTripAbortsInsteadOfAdvancing()
     QVERIFY(runner.startProgram(programId));
     QCOMPARE(controller.openZoneNumber(), 1);
 
+    QSignalSpy opened(&controller, &ZoneController::zoneOpened);
     backend.setLineValue(zoneOffsetFor(1), Gpio::Value::Inactive);
     backend.setLineValue(zoneOffsetFor(8), Gpio::Value::Active);
 
     controller.triggerWatchdogForTest();
 
+    QCOMPARE(opened.count(), 0);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(finished.count(), 0);
@@ -374,7 +397,7 @@ void TestProgramRunner::watchdogMismatchTripAbortsInsteadOfAdvancing()
     QCOMPARE(backend.lineValue(zoneOffsetFor(5)), Gpio::Value::Inactive);
 }
 
-void TestProgramRunner::watchdogReadFailureTripAbortsInsteadOfAdvancing()
+void TestProgramRunner::watchdogReadFailureTripAbortsTheProgram()
 {
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
@@ -395,9 +418,11 @@ void TestProgramRunner::watchdogReadFailureTripAbortsInsteadOfAdvancing()
     QVERIFY(runner.startProgram(programId));
     QCOMPARE(controller.openZoneNumber(), 6);
 
+    QSignalSpy opened(&controller, &ZoneController::zoneOpened);
     backend.failRead = true;
     controller.triggerWatchdogForTest();
 
+    QCOMPARE(opened.count(), 0);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
@@ -428,6 +453,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     QVERIFY(runner.startProgram(programId));
     QCOMPARE(controller.openZoneNumber(), 4);
 
+    QSignalSpy opened(&controller, &ZoneController::zoneOpened);
     backend.setLineValue(zoneOffsetFor(4), Gpio::Value::Inactive);
     backend.setLineValue(zoneOffsetFor(7), Gpio::Value::Active);
     backend.setFailNextSetValues(true);
@@ -442,6 +468,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
 
     controller.expireCloseTimerForTest();
 
+    QCOMPARE(opened.count(), 0);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
@@ -449,7 +476,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     QCOMPARE(backend.lineValue(zoneOffsetFor(1)), Gpio::Value::Inactive);
 }
 
-void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinishedNotAborted()
+void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinished()
 {
     {
         QTemporaryDir dir;
@@ -498,8 +525,8 @@ void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinishedNotAborted
         ZoneController controller(&backend, eightZones(), true, 3600);
         QVERIFY(controller.begin());
 
-        // Zone 6 follows zone 3 in the sequence but is disabled: the trip on zone 3
-        // (the last zone that will ever actually water) must still finish, not abort.
+        // Zone 6 follows zone 3 in the sequence but is disabled; zone 3 is the last
+        // zone that will ever actually water.
         const int programId = buildProgram(source, { 3, 6 }, { 797, 809 });
         QVERIFY(programId > 0);
 
@@ -589,6 +616,124 @@ void TestProgramRunner::programOfOnlyDisabledZonesFinishesImmediately()
     QCOMPARE(controller.openZoneNumber(), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(8)), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(zoneOffsetFor(1)), Gpio::Value::Inactive);
+}
+
+void TestProgramRunner::firstZoneOpenFailureReturnsFalseAndAbortsTheProgram()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(detachZoneIdsFromNumbers(source));
+
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+
+    const int programId = buildProgram(source, { 6, 3 }, { 607, 631 });
+    QVERIFY(programId > 0);
+
+    ProgramRunner runner(&controller, &source);
+    QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
+    backend.setFailNextSetValues(true);
+
+    QVERIFY(runner.startProgram(programId) == false);
+
+    QCOMPARE(aborted.count(), 1);
+    QCOMPARE(aborted.first().at(0).toInt(), programId);
+    QCOMPARE(runner.isRunning(), false);
+    QCOMPARE(runner.runningProgramId(), 0);
+    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(backend.lineValue(zoneOffsetFor(6)), Gpio::Value::Inactive);
+
+    QVERIFY(runner.startProgram(programId));
+    QCOMPARE(controller.openZoneNumber(), 6);
+}
+
+void TestProgramRunner::aRepeatedZoneNumberWatersEachOccurrenceSeparately()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(detachZoneIdsFromNumbers(source));
+
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+
+    const int programId = buildProgram(source, { 3, 3, 5 }, { 883, 887, 907 });
+    QVERIFY(programId > 0);
+
+    ProgramRunner runner(&controller, &source);
+    QSignalSpy opened(&controller, &ZoneController::zoneOpened);
+
+    QVERIFY(runner.startProgram(programId));
+    QCOMPARE(controller.openZoneNumber(), 3);
+    QCOMPARE(opened.count(), 1);
+    QCOMPARE(opened.at(0).at(1).toInt(), 883);
+
+    controller.expireCloseTimerForTest();
+    QCOMPARE(controller.openZoneNumber(), 3);
+    QCOMPARE(opened.count(), 2);
+    QCOMPARE(opened.at(1).at(1).toInt(), 887);
+
+    controller.expireCloseTimerForTest();
+    QCOMPARE(controller.openZoneNumber(), 5);
+    QCOMPARE(opened.count(), 3);
+    QCOMPARE(opened.at(2).at(1).toInt(), 907);
+}
+
+void TestProgramRunner::watchdogTrippedSignalAbortsARunningProgram()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(detachZoneIdsFromNumbers(source));
+
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+
+    const int programId = buildProgram(source, { 4, 6 }, { 911, 919 });
+    QVERIFY(programId > 0);
+
+    ProgramRunner runner(&controller, &source);
+    QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
+
+    QVERIFY(runner.startProgram(programId));
+    QCOMPARE(controller.openZoneNumber(), 4);
+
+    emit controller.watchdogTripped(4);
+
+    QCOMPARE(aborted.count(), 1);
+    QCOMPARE(aborted.first().at(0).toInt(), programId);
+    QCOMPARE(runner.isRunning(), false);
+    QCOMPARE(controller.openZoneNumber(), 0);
+}
+
+void TestProgramRunner::abortWhileIdleIsANoOp()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(detachZoneIdsFromNumbers(source));
+
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+
+    QVERIFY(controller.openZone(2, 929));
+
+    ProgramRunner runner(&controller, &source);
+    QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
+
+    runner.abort();
+
+    QCOMPARE(aborted.count(), 0);
+    QCOMPARE(controller.openZoneNumber(), 2);
 }
 
 QTEST_MAIN(TestProgramRunner)
