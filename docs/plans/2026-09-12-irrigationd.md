@@ -2585,6 +2585,10 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime,
         *valid = false;
     }
 
+    if(isValidMinutesAfterMidnight(startTime.minutesAfterMidnight) == false) {
+        return QDateTime();
+    }
+
     QTimeZone zone(startTime.timezone.toUtf8());
     if(zone.isValid() == false) {
         return QDateTime();
@@ -2592,15 +2596,11 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime,
 
     const QTime localTime = QTime(0, 0).addSecs(startTime.minutesAfterMidnight * 60);
 
-    // Spring forward: the local time does not exist. Reject rather than invent one.
-    QDateTime rejected(localDate, localTime, zone, QDateTime::TransitionResolution::Reject);
-    if(rejected.isValid() == false) {
-        return QDateTime();
-    }
-
-    // Fall back: the local time happens twice. Run once, on the earlier offset.
+    // Reject invalidates a fall-back repeat as well as a spring-forward gap. PreferBefore
+    // keeps a repeat on its earlier offset at the requested wall clock and slides a gap to
+    // an adjacent one, so a resolved date or time that differs from the request is a gap.
     QDateTime resolved(localDate, localTime, zone, QDateTime::TransitionResolution::PreferBefore);
-    if(resolved.isValid() == false) {
+    if(resolved.isValid() == false || resolved.date() != localDate || resolved.time() != localTime) {
         return QDateTime();
     }
 
@@ -2611,9 +2611,12 @@ QDateTime Scheduler::resolveToUtc(const ProgramStartTime& startTime,
 }
 ```
 
-Both constructions are needed. `PreferBefore` alone still yields a valid
-`QDateTime` inside a spring-forward gap by sliding to an adjacent instant, which
-would run the program an hour early on exactly one day a year.
+⚠ Never add a `Reject` construction here. Qt's `Reject` invalidates the repeated
+fall-back hour too, so a start time in that hour is recorded `missed` and never
+waters, once a year in every zone that observes DST. The wall-clock comparison is
+what refuses a spring-forward gap; `PreferBefore` on its own slides the gap time
+and runs the program an hour early. Measured on host Qt 6.11.2 and target Qt
+6.10.3 (see departure 12).
 
 - [ ] **Step 6: Implement the tick**
 
@@ -4052,7 +4055,7 @@ daemon worker thread, and valve state keeps a single owning thread.
 
 **2. Two more firing outcomes, `skipped_stop` and `failed` (§6).** §6 lists four
 outcomes. A firing that comes due while the stop button is held is recorded
-`skipped_stop`, and one whose program could not open its first zone is recorded
+`skipped_stop`, and one whose program could not open its first enabled zone is recorded
 `failed`, so every row states what happened to that firing.
 
 **3. Busy includes an open zone with no program running (§5.5).** §5.5 skips a start
@@ -4097,6 +4100,14 @@ fake. A real controller over a `MockBackend` is cheap, already has its own tests
 cannot drift from the interface the runner calls, which a hand-written fake does the
 first time a signature changes. The `expireCloseTimerForTest()` seam keeps those
 tests fast.
+
+**12. Time-zone resolution is `PreferBefore` plus a wall-clock comparison (§5.3).**
+§5.3 prescribes `Reject` for spring-forward gaps and `PreferBefore` for fall-back
+repeats. Qt's `Reject` invalidates a fall-back repeat as well as a gap, which
+recorded the repeated hour `missed`. `Scheduler::resolveToUtc()` constructs the local
+time with `PreferBefore` alone and treats the result as a gap when its wall-clock
+date or time differs from the requested one. Measured identical on host Qt 6.11.2
+and target Qt 6.10.3 across every zone from 2024 to 2028.
 
 ### Known gaps
 
