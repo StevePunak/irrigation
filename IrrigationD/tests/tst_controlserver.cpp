@@ -248,6 +248,82 @@ namespace
 
         return rows;
     }
+
+    QJsonObject utcStartTimeJson(int minutesAfterMidnight)
+    {
+        return QJsonObject{ { "minutesAfterMidnight", minutesAfterMidnight }, { "timezone", "UTC" } };
+    }
+
+    QJsonObject programZoneJson(int zoneId, int sequence, int durationSeconds)
+    {
+        return QJsonObject{ { "zoneId", zoneId }, { "sequence", sequence }, { "durationSeconds", durationSeconds } };
+    }
+
+    QByteArray daysOfWeekProgramBody(const QString& name, int dowMask, bool enabled,
+                                     const QJsonArray& startTimes, const QJsonArray& zones)
+    {
+        const QJsonObject body{
+            { "name", name }, { "enabled", enabled }, { "dayMode", "DaysOfWeek" }, { "dowMask", dowMask },
+            { "intervalDays", 0 }, { "anchorDate", "" },
+            { "startTimes", startTimes }, { "zones", zones }
+        };
+        return QJsonDocument(body).toJson(QJsonDocument::Compact);
+    }
+
+    QString abortTriggerSql(const QString& event, const QString& table, const QString& condition)
+    {
+        return QString("CREATE TRIGGER matrix_abort BEFORE %1 ON %2 WHEN %3 "
+                       "BEGIN SELECT RAISE(ABORT, 'matrix abort'); END;").arg(event, table, condition);
+    }
+
+    // A deferred foreign key, tripped from an AFTER INSERT trigger, makes COMMIT itself fail.
+    QStringList commitFailureTriggerSql(int zoneDurationSeconds)
+    {
+        return QStringList{
+            "CREATE TABLE commit_poison (program_ref INTEGER REFERENCES programs(id) "
+            "DEFERRABLE INITIALLY DEFERRED)",
+            QString("CREATE TRIGGER matrix_commit AFTER INSERT ON program_zones "
+                    "WHEN NEW.duration_seconds = %1 "
+                    "BEGIN INSERT INTO commit_poison VALUES (-1); END;").arg(zoneDurationSeconds)
+        };
+    }
+
+    bool executeOnSeparateConnection(const QString& dbPath, const QStringList& statements)
+    {
+        IrrigationDataSource source(dbPath);
+        if(source.open() == false) {
+            return false;
+        }
+        for(const QString& statement : statements) {
+            bool ok = false;
+            source.rawQuery(statement, &ok);
+            if(ok == false) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int tableRowCount(IrrigationDataSource& source, const QString& table)
+    {
+        bool ok = false;
+        QSqlQuery query = source.rawQuery(QString("SELECT COUNT(*) FROM %1").arg(table), &ok);
+        if(ok == false || query.next() == false) {
+            return -1;
+        }
+        return query.value(0).toInt();
+    }
+
+    QJsonObject programObjectWithId(const QJsonArray& programs, int programId)
+    {
+        QJsonObject result;
+        for(const QJsonValue& value : programs) {
+            if(value.toObject().value("id").toInt() == programId) {
+                result = value.toObject();
+            }
+        }
+        return result;
+    }
 }
 
 class TestControlServer : public QObject
@@ -317,6 +393,8 @@ private slots:
     void programPostAnswers500WhenCommitFailsWritingNothing();
     void programPostAnswers500WhenAZoneInsertFailsWritingNothing();
     void programPostAnswers500WhenAStartTimeInsertFailsWritingNothing();
+    void programPostWriteStepFailureAnswersErrorAndWritesNothing_data();
+    void programPostWriteStepFailureAnswersErrorAndWritesNothing();
 
     void programPutUnknownIdReturns404();
     void programPutValidationRejectsAndPreservesEverything_data();
@@ -336,6 +414,8 @@ private slots:
     void programPutAnswers500WhenAStartTimeInsertFailsLeavingOriginalDataIntact();
     void programPutAnswers500WhenAZoneDeleteFailsLeavingZonesIntact();
     void programPutAnswers500WhenTheFirstOfTwoStartTimeInsertsFails();
+    void programPutWriteStepFailureAnswersErrorAndLeavesTheProgramStanding_data();
+    void programPutWriteStepFailureAnswersErrorAndLeavesTheProgramStanding();
 
     void programsGetReportsEmptyNextRunUtcForADisabledProgram();
 
@@ -1831,6 +1911,96 @@ void TestControlServer::programPostAnswers500WhenAStartTimeInsertFailsWritingNot
     server.stop(TimeSpan::fromSeconds(5));
 }
 
+void TestControlServer::programPostWriteStepFailureAnswersErrorAndWritesNothing_data()
+{
+    QTest::addColumn<QStringList>("triggerSql");
+    QTest::addColumn<QByteArray>("body");
+    QTest::addColumn<int>("expectedStatus");
+
+    // Row positions follow array order: 720 and 820 are inserted first.
+    const QJsonArray startTimes{ utcStartTimeJson(720), utcStartTimeJson(710) };
+    const QJsonArray zones{ programZoneJson(3, 0, 820), programZoneJson(4, 1, 810) };
+    const QByteArray body = daysOfWeekProgramBody("Attempt", 12, true, startTimes, zones);
+
+    QTest::newRow("insertProgram with empty startTimes and zones")
+        << QStringList{ abortTriggerSql("INSERT", "programs", "NEW.name = 'Attempt'") }
+        << daysOfWeekProgramBody("Attempt", 12, true, QJsonArray{}, QJsonArray{})
+        << 500;
+    QTest::newRow("insertStartTime at the first position")
+        << QStringList{ abortTriggerSql("INSERT", "program_start_times", "NEW.minutes_after_midnight = 720") }
+        << body << 500;
+    QTest::newRow("insertStartTime at the second position")
+        << QStringList{ abortTriggerSql("INSERT", "program_start_times", "NEW.minutes_after_midnight = 710") }
+        << body << 500;
+    QTest::newRow("insertProgramZone at the first position")
+        << QStringList{ abortTriggerSql("INSERT", "program_zones", "NEW.duration_seconds = 820") }
+        << body << 500;
+    QTest::newRow("insertProgramZone at the second position")
+        << QStringList{ abortTriggerSql("INSERT", "program_zones", "NEW.duration_seconds = 810") }
+        << body << 500;
+    QTest::newRow("commitTransaction")
+        << commitFailureTriggerSql(810)
+        << body << 500;
+    QTest::newRow("zoneIdsAreKnown with the second zoneId unknown")
+        << QStringList{}
+        << daysOfWeekProgramBody("Attempt", 12, true, startTimes,
+                                 QJsonArray{ programZoneJson(3, 0, 820), programZoneJson(9999, 1, 810) })
+        << 400;
+}
+
+void TestControlServer::programPostWriteStepFailureAnswersErrorAndWritesNothing()
+{
+    QFETCH(QStringList, triggerSql);
+    QFETCH(QByteArray, body);
+    QFETCH(int, expectedStatus);
+
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+    QVERIFY(executeOnSeparateConnection(dbPath, triggerSql));
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/programs", body);
+    QCOMPARE(statusCode(reply), expectedStatus);
+
+    // Every read-back precedes stop(): closing the server's connection rolls back a transaction
+    // the handler left open.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    QCOMPARE(statusCode(getReply), 200);
+    QCOMPARE(QJsonDocument::fromJson(getReply->readAll()).array().count(), 0);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        QCOMPARE(tableRowCount(verify, "programs"), 0);
+        QCOMPARE(tableRowCount(verify, "program_start_times"), 0);
+        QCOMPARE(tableRowCount(verify, "program_zones"), 0);
+    }
+
+    QNetworkReply* followUpReply = postJson(manager, server.boundPort(), "/admin/programs",
+                                            daysOfWeekProgramBody("Follow Up", 48, true,
+                                                                  QJsonArray{ utcStartTimeJson(900) },
+                                                                  QJsonArray{ programZoneJson(5, 0, 950) }));
+    QCOMPARE(statusCode(followUpReply), 201);
+    const int followUpId = QJsonDocument::fromJson(followUpReply->readAll()).object().value("id").toInt();
+    QVERIFY(followUpId > 0);
+
+    QNetworkReply* followUpGetReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonArray programs = QJsonDocument::fromJson(followUpGetReply->readAll()).array();
+    QCOMPARE(programs.count(), 1);
+    const QJsonObject followUp = programs.at(0).toObject();
+    QCOMPARE(followUp.value("id").toInt(), followUpId);
+    QCOMPARE(followUp.value("name").toString(), QString("Follow Up"));
+    QCOMPARE(followUp.value("startTimes").toArray().count(), 1);
+    QCOMPARE(followUp.value("startTimes").toArray().at(0).toObject().value("minutesAfterMidnight").toInt(), 900);
+    QCOMPARE(followUp.value("zones").toArray().count(), 1);
+    QCOMPARE(followUp.value("zones").toArray().at(0).toObject().value("durationSeconds").toInt(), 950);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
 void TestControlServer::programPutUnknownIdReturns404()
 {
     QTemporaryDir dir;
@@ -2834,8 +3004,6 @@ void TestControlServer::programPutAnswers500WhenAZoneDeleteFailsLeavingZonesInta
         QCOMPARE(verifyZones.at(0).durationSeconds, 555);
     }
 
-    // The still-standing poisoned zone would trip the same trigger on a second PUT to this
-    // program: the follow-up write goes to a fresh program instead.
     const QJsonObject validBody{
         { "name", "Elsewhere" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
         { "intervalDays", 0 }, { "anchorDate", "" },
@@ -2914,8 +3082,6 @@ void TestControlServer::programPutAnswers500WhenTheFirstOfTwoStartTimeInsertsFai
         QCOMPARE(verifyStartTimes.at(0).minutesAfterMidnight, 400);
     }
 
-    // This body reconciles onto the stored row, so it never inserts 1234 and does not trip
-    // the trigger.
     const QJsonObject validBody{
         { "name", "TwoInserts" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
         { "intervalDays", 0 }, { "anchorDate", "" },
@@ -2926,6 +3092,181 @@ void TestControlServer::programPutAnswers500WhenTheFirstOfTwoStartTimeInsertsFai
                                          QString("/admin/programs/%1").arg(program.id),
                                          QJsonDocument(validBody).toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(secondReply), 200);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programPutWriteStepFailureAnswersErrorAndLeavesTheProgramStanding_data()
+{
+    QTest::addColumn<QStringList>("triggerSql");
+    QTest::addColumn<QByteArray>("body");
+    QTest::addColumn<int>("expectedStatus");
+
+    // Row positions follow processing order against the seeded 400, 402 and 401: reconcile keeps
+    // 400, deletes 402 then 401 (stored id order) and inserts 730 then 720 (array order); the
+    // zone loop inserts 840 then 830.
+    const QJsonArray startTimes{ utcStartTimeJson(730), utcStartTimeJson(400), utcStartTimeJson(720) };
+    const QJsonArray zones{ programZoneJson(3, 0, 840), programZoneJson(4, 1, 830) };
+    const QByteArray body = daysOfWeekProgramBody("Attempt", 12, false, startTimes, zones);
+
+    QTest::newRow("updateProgram")
+        << QStringList{ abortTriggerSql("UPDATE", "programs", "NEW.name = 'Attempt'") }
+        << body << 500;
+    QTest::newRow("deleteStartTime at the first position")
+        << QStringList{ abortTriggerSql("DELETE", "program_start_times", "OLD.minutes_after_midnight = 402") }
+        << body << 500;
+    QTest::newRow("deleteStartTime at the second position")
+        << QStringList{ abortTriggerSql("DELETE", "program_start_times", "OLD.minutes_after_midnight = 401") }
+        << body << 500;
+    QTest::newRow("insertStartTime at the first position")
+        << QStringList{ abortTriggerSql("INSERT", "program_start_times", "NEW.minutes_after_midnight = 730") }
+        << body << 500;
+    QTest::newRow("insertStartTime at the second position")
+        << QStringList{ abortTriggerSql("INSERT", "program_start_times", "NEW.minutes_after_midnight = 720") }
+        << body << 500;
+    QTest::newRow("deleteProgramZones")
+        << QStringList{ abortTriggerSql("DELETE", "program_zones", "OLD.duration_seconds = 520") }
+        << body << 500;
+    QTest::newRow("insertProgramZone at the first position")
+        << QStringList{ abortTriggerSql("INSERT", "program_zones", "NEW.duration_seconds = 840") }
+        << body << 500;
+    QTest::newRow("insertProgramZone at the second position")
+        << QStringList{ abortTriggerSql("INSERT", "program_zones", "NEW.duration_seconds = 830") }
+        << body << 500;
+    QTest::newRow("commitTransaction")
+        << commitFailureTriggerSql(830)
+        << body << 500;
+    QTest::newRow("zoneIdsAreKnown with the second zoneId unknown")
+        << QStringList{}
+        << daysOfWeekProgramBody("Attempt", 12, false, startTimes,
+                                 QJsonArray{ programZoneJson(3, 0, 840), programZoneJson(9999, 1, 830) })
+        << 400;
+}
+
+void TestControlServer::programPutWriteStepFailureAnswersErrorAndLeavesTheProgramStanding()
+{
+    QFETCH(QStringList, triggerSql);
+    QFETCH(QByteArray, body);
+    QFETCH(int, expectedStatus);
+
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    Program program;
+    program.name = "Original";
+    program.enabled = true;
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 3;
+    ProgramStartTime kept; kept.minutesAfterMidnight = 400; kept.timezone = "UTC";
+    ProgramStartTime deletedFirst; deletedFirst.minutesAfterMidnight = 402; deletedFirst.timezone = "UTC";
+    ProgramStartTime deletedSecond; deletedSecond.minutesAfterMidnight = 401; deletedSecond.timezone = "UTC";
+    // Seed order sets id order, the order reconcile deletes unmatched rows in.
+    QList<ProgramStartTime> startTimes{ kept, deletedFirst, deletedSecond };
+    ProgramZone firstZone; firstZone.zoneId = 1; firstZone.sequence = 0; firstZone.durationSeconds = 510;
+    ProgramZone secondZone; secondZone.zoneId = 2; secondZone.sequence = 1; secondZone.durationSeconds = 520;
+    QList<ProgramZone> zones{ firstZone, secondZone };
+    QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
+
+    Program neighbour;
+    neighbour.name = "Neighbour";
+    neighbour.dayMode = Program::DayMode::DaysOfWeek;
+    neighbour.dowMask = 48;
+    ProgramStartTime neighbourStart; neighbourStart.minutesAfterMidnight = 940; neighbourStart.timezone = "UTC";
+    QList<ProgramStartTime> neighbourStartTimes{ neighbourStart };
+    ProgramZone neighbourZone; neighbourZone.zoneId = 6; neighbourZone.sequence = 0; neighbourZone.durationSeconds = 930;
+    QList<ProgramZone> neighbourZones{ neighbourZone };
+    QVERIFY(seedProgramDirect(dbPath, neighbour, neighbourStartTimes, neighbourZones));
+
+    QVERIFY(executeOnSeparateConnection(dbPath, triggerSql));
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = putJson(manager, server.boundPort(), QString("/admin/programs/%1").arg(program.id), body);
+    QCOMPARE(statusCode(reply), expectedStatus);
+
+    // Every read-back precedes stop(): closing the server's connection rolls back a transaction
+    // the handler left open.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    QCOMPARE(statusCode(getReply), 200);
+    const QJsonObject got = programObjectWithId(QJsonDocument::fromJson(getReply->readAll()).array(), program.id);
+    QCOMPARE(got.value("id").toInt(), program.id);
+    QCOMPARE(got.value("name").toString(), QString("Original"));
+    QCOMPARE(got.value("enabled").toBool(), true);
+    QCOMPARE(got.value("dayMode").toString(), QString("DaysOfWeek"));
+    QCOMPARE(got.value("dowMask").toInt(), 3);
+    const QJsonArray gotStartTimes = got.value("startTimes").toArray();
+    QCOMPARE(gotStartTimes.count(), startTimes.count());
+    for(int i = 0; i < startTimes.count(); i++) {
+        const QJsonObject gotStartTime = gotStartTimes.at(i).toObject();
+        QCOMPARE(gotStartTime.value("id").toInt(), startTimes.at(i).id);
+        QCOMPARE(gotStartTime.value("minutesAfterMidnight").toInt(), startTimes.at(i).minutesAfterMidnight);
+        QCOMPARE(gotStartTime.value("timezone").toString(), startTimes.at(i).timezone);
+    }
+    const QJsonArray gotZones = got.value("zones").toArray();
+    QCOMPARE(gotZones.count(), zones.count());
+    for(int i = 0; i < zones.count(); i++) {
+        const QJsonObject gotZone = gotZones.at(i).toObject();
+        QCOMPARE(gotZone.value("id").toInt(), zones.at(i).id);
+        QCOMPARE(gotZone.value("zoneId").toInt(), zones.at(i).zoneId);
+        QCOMPARE(gotZone.value("sequence").toInt(), zones.at(i).sequence);
+        QCOMPARE(gotZone.value("durationSeconds").toInt(), zones.at(i).durationSeconds);
+    }
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        const ProgramList programs = verify.allPrograms();
+        Program stored;
+        for(const Program& candidate : programs) {
+            if(candidate.id == program.id) {
+                stored = candidate;
+            }
+        }
+        QCOMPARE(stored.id, program.id);
+        QCOMPARE(stored.name, QString("Original"));
+        QCOMPARE(stored.enabled, true);
+        QCOMPARE(stored.dayMode, Program::DayMode::DaysOfWeek);
+        QCOMPARE(stored.dowMask, 3);
+
+        const ProgramStartTimeList storedStartTimes = verify.startTimesFor(program.id);
+        QCOMPARE(storedStartTimes.count(), startTimes.count());
+        for(int i = 0; i < startTimes.count(); i++) {
+            QCOMPARE(storedStartTimes.at(i).id, startTimes.at(i).id);
+            QCOMPARE(storedStartTimes.at(i).minutesAfterMidnight, startTimes.at(i).minutesAfterMidnight);
+            QCOMPARE(storedStartTimes.at(i).timezone, startTimes.at(i).timezone);
+        }
+
+        const ProgramZoneList storedZones = verify.zonesFor(program.id);
+        QCOMPARE(storedZones.count(), zones.count());
+        for(int i = 0; i < zones.count(); i++) {
+            QCOMPARE(storedZones.at(i).id, zones.at(i).id);
+            QCOMPARE(storedZones.at(i).zoneId, zones.at(i).zoneId);
+            QCOMPARE(storedZones.at(i).sequence, zones.at(i).sequence);
+            QCOMPARE(storedZones.at(i).durationSeconds, zones.at(i).durationSeconds);
+        }
+    }
+
+    const QByteArray followUpBody = daysOfWeekProgramBody("Neighbour After", 48, true,
+                                                          QJsonArray{ utcStartTimeJson(940), utcStartTimeJson(960) },
+                                                          QJsonArray{ programZoneJson(7, 0, 970) });
+    QNetworkReply* followUpReply = putJson(manager, server.boundPort(),
+                                           QString("/admin/programs/%1").arg(neighbour.id), followUpBody);
+    QCOMPARE(statusCode(followUpReply), 200);
+
+    QNetworkReply* followUpGetReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject followUp = programObjectWithId(QJsonDocument::fromJson(followUpGetReply->readAll()).array(),
+                                                     neighbour.id);
+    QCOMPARE(followUp.value("name").toString(), QString("Neighbour After"));
+    const QJsonArray followUpStartTimes = followUp.value("startTimes").toArray();
+    QCOMPARE(followUpStartTimes.count(), 2);
+    QCOMPARE(followUpStartTimes.at(0).toObject().value("id").toInt(), neighbourStartTimes.at(0).id);
+    QCOMPARE(followUpStartTimes.at(0).toObject().value("minutesAfterMidnight").toInt(), 940);
+    QCOMPARE(followUpStartTimes.at(1).toObject().value("minutesAfterMidnight").toInt(), 960);
+    const QJsonArray followUpZones = followUp.value("zones").toArray();
+    QCOMPARE(followUpZones.count(), 1);
+    QCOMPARE(followUpZones.at(0).toObject().value("durationSeconds").toInt(), 970);
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
 }
