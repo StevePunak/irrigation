@@ -9,10 +9,11 @@
 #include "programrunner.h"
 #include "zonecontroller.h"
 
-class ReadFailBackend : public MockBackend
+class HistoryBackend : public MockBackend
 {
 public:
     bool failRead = false;
+    QList<QPair<quint32, Gpio::Value>> history;
 
     virtual bool getValues(Gpio::RequestHandle handle, const QList<quint32>& offsets, QList<Gpio::Value>& values) override
     {
@@ -21,6 +22,27 @@ public:
             return false;
         }
         return MockBackend::getValues(handle, offsets, values);
+    }
+
+    virtual bool setValues(Gpio::RequestHandle handle, const QList<quint32>& offsets, const QList<Gpio::Value>& values) override
+    {
+        const bool ok = MockBackend::setValues(handle, offsets, values);
+        if(ok == true) {
+            for(int i = 0; i < offsets.count(); i++) {
+                history.append(qMakePair(offsets.at(i), values.at(i)));
+            }
+        }
+        return ok;
+    }
+
+    bool everWrittenActive(quint32 offset) const
+    {
+        for(const auto& entry : history) {
+            if(entry.first == offset && entry.second == Gpio::Value::Active) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -59,9 +81,6 @@ static Zone zoneByNumber(IrrigationDataSource& source, int number)
     return Zone();
 }
 
-// Renumbers the program id past any zone sequence or index value reached in these
-// tests, so a payload transposition between programId and _index cannot hide behind
-// a coincidence where both are small integers.
 static int buildProgram(IrrigationDataSource& source, const QList<ZoneStep>& steps)
 {
     Program program;
@@ -70,12 +89,13 @@ static int buildProgram(IrrigationDataSource& source, const QList<ZoneStep>& ste
         return 0;
     }
 
+    const int shiftedId = program.id * 1000 + 500;
     bool shifted = false;
-    source.rawQuery(QString("UPDATE programs SET id = id + 500 WHERE id = %1").arg(program.id), &shifted);
+    source.rawQuery(QString("UPDATE programs SET id = %1 WHERE id = %2").arg(shiftedId).arg(program.id), &shifted);
     if(shifted == false) {
         return 0;
     }
-    program.id += 500;
+    program.id = shiftedId;
 
     const ZoneList zones = source.allZones();
     for(const ZoneStep& step : steps) {
@@ -365,7 +385,7 @@ void TestProgramRunner::watchdogMismatchTripAbortsTheProgram()
     QVERIFY(source.open());
     QVERIFY(detachZoneIdsFromNumbers(source));
 
-    MockBackend backend;
+    HistoryBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
     ZoneController controller(&backend, eightZones(), true, 3600);
     QVERIFY(controller.begin());
@@ -381,12 +401,14 @@ void TestProgramRunner::watchdogMismatchTripAbortsTheProgram()
     QCOMPARE(controller.openZoneNumber(), 1);
 
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
+    backend.history.clear();
     backend.setLineValue(zoneOffsetFor(1), Gpio::Value::Inactive);
     backend.setLineValue(zoneOffsetFor(8), Gpio::Value::Active);
 
     controller.triggerWatchdogForTest();
 
     QCOMPARE(opened.count(), 0);
+    QVERIFY(backend.everWrittenActive(zoneOffsetFor(8)) == false);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(finished.count(), 0);
@@ -404,7 +426,7 @@ void TestProgramRunner::watchdogReadFailureTripAbortsTheProgram()
     QVERIFY(source.open());
     QVERIFY(detachZoneIdsFromNumbers(source));
 
-    ReadFailBackend backend;
+    HistoryBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
     ZoneController controller(&backend, eightZones(), true, 3600);
     QVERIFY(controller.begin());
@@ -419,10 +441,12 @@ void TestProgramRunner::watchdogReadFailureTripAbortsTheProgram()
     QCOMPARE(controller.openZoneNumber(), 6);
 
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
+    backend.history.clear();
     backend.failRead = true;
     controller.triggerWatchdogForTest();
 
     QCOMPARE(opened.count(), 0);
+    QVERIFY(backend.everWrittenActive(zoneOffsetFor(2)) == false);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
@@ -438,7 +462,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     QVERIFY(source.open());
     QVERIFY(detachZoneIdsFromNumbers(source));
 
-    MockBackend backend;
+    HistoryBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
     ZoneController controller(&backend, eightZones(), true, 3600);
     QVERIFY(controller.begin());
@@ -454,6 +478,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     QCOMPARE(controller.openZoneNumber(), 4);
 
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
+    backend.history.clear();
     backend.setLineValue(zoneOffsetFor(4), Gpio::Value::Inactive);
     backend.setLineValue(zoneOffsetFor(7), Gpio::Value::Active);
     backend.setFailNextSetValues(true);
@@ -469,6 +494,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     controller.expireCloseTimerForTest();
 
     QCOMPARE(opened.count(), 0);
+    QVERIFY(backend.everWrittenActive(zoneOffsetFor(7)) == false);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);

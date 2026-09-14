@@ -56,6 +56,7 @@ private slots:
     void allOffFailingInsideTripLeavesLatchUntilRetriedCloseLands();
     void closeRetriesAfterTwoConsecutiveWriteFailuresThenSucceeds();
     void closeRetryLandsWithinTwoRetryIntervals();
+    void allOffRetryInsideATripLandsWithinTwoRetryIntervals();
     void watchdogTripsWhenTheOpenZonesLineDropsOut();
     void watchdogTripsWhenAForeignLineEnergisesWithAZoneOpen();
     void maxZoneSecondsNeverRisesPastTheHardCeiling();
@@ -116,7 +117,7 @@ void TestZoneController::durationIsClampedToTheCeiling()
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(1).toInt(), 120);
-    QVERIFY(controller.secondsRemaining() >= 118 && controller.secondsRemaining() <= 119);
+    QCOMPARE(controller.secondsRemaining(), 119);
 }
 
 void TestZoneController::durationBelowOneIsRejected()
@@ -322,6 +323,7 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
     ZoneController controller(&backend, eightZones(), true, 3600);
     QVERIFY(controller.begin());
     QVERIFY(controller.openZone(5, 839));
+    controller.disableCloseTimerForTest();
 
     backend.setLineValue(16, Gpio::Value::Inactive);
     backend.setLineValue(6, Gpio::Value::Active);
@@ -336,8 +338,6 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
     QVERIFY(controller.closeTimerActiveForTest());
     QVERIFY(controller.openZone(1, 601) == false);
 
-    // A clean read-back that still shows zone 5 open must not clear the latch:
-    // the retry has not landed and _openZone is still 5.
     backend.setLineValue(16, Gpio::Value::Active);
     backend.setLineValue(6, Gpio::Value::Inactive);
     controller.triggerWatchdogForTest();
@@ -350,6 +350,7 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
     QCOMPARE(controller.openZoneNumber(), 0);
     QCOMPARE(backend.lineValue(16), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(6), Gpio::Value::Inactive);
+    QVERIFY(controller.isFaulted());
 
     controller.triggerWatchdogForTest();
     QVERIFY(controller.isFaulted() == false);
@@ -399,8 +400,27 @@ void TestZoneController::closeRetryLandsWithinTwoRetryIntervals()
     controller.expireCloseTimerForTest();
     QCOMPARE(controller.openZoneNumber(), 3);
 
-    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 2500);
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
+}
+
+void TestZoneController::allOffRetryInsideATripLandsWithinTwoRetryIntervals()
+{
+    FaultBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    controller.setWatchdogInterval(TimeSpan::fromSeconds(60));
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(5, 839));
+
+    backend.setLineValue(16, Gpio::Value::Inactive);
+    backend.setLineValue(6, Gpio::Value::Active);
+    backend.failWrites = 1;
+    controller.triggerWatchdogForTest();
+    QCOMPARE(controller.openZoneNumber(), 5);
+
+    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 2500);
 }
 
 void TestZoneController::watchdogTripsWhenTheOpenZonesLineDropsOut()
