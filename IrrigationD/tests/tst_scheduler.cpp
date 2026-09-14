@@ -65,6 +65,7 @@ private slots:
     void oddAndEvenUseTheDayOfMonth();
     void everyNDaysCountsFromTheAnchor();
     void springForwardGapIsRejected();
+    void fallBackRepeatPicksTheEarlierOffset();
     void aStartTimeDoesNotDriftAcrossDst();
     void minutesAfterMidnightOutOfRangeIsRejected();
 
@@ -146,6 +147,68 @@ void TestScheduler::springForwardGapIsRejected()
     QDateTime resolved = Scheduler::resolveToUtc(startTime, QDate(2026, 3, 8), &valid);
     QCOMPARE(valid, false);
     QVERIFY(resolved.isValid() == false);
+}
+
+void TestScheduler::fallBackRepeatPicksTheEarlierOffset()
+{
+    // 2026-11-01 01:30 America/Los_Angeles occurs twice: 08:30Z (PDT) and 09:30Z (PST).
+    ProgramStartTime startTime;
+    startTime.minutesAfterMidnight = 90;
+    startTime.timezone = "America/Los_Angeles";
+
+    bool valid = false;
+    const QDateTime resolved = Scheduler::resolveToUtc(startTime, QDate(2026, 11, 1), &valid);
+    QVERIFY(valid);
+
+    const QTimeZone zone("America/Los_Angeles");
+    const QDateTime earlierOffset = QDateTime(QDate(2026, 11, 1), QTime(1, 30), zone,
+                                               QDateTime::TransitionResolution::PreferBefore).toUTC();
+    const QDateTime laterOffset = QDateTime(QDate(2026, 11, 1), QTime(1, 30), zone,
+                                             QDateTime::TransitionResolution::PreferAfter).toUTC();
+    QVERIFY(earlierOffset != laterOffset);
+    QCOMPARE(resolved, earlierOffset);
+
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    offsetIdsSoProgramAndStartTimeDiffer(source);
+
+    Program program;
+    program.name = "Fall back";
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 1 << 6;   // Sunday only: 2026-11-01 is a Sunday, 2026-10-31 a Saturday
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime dbStartTime;
+    dbStartTime.programId = program.id;
+    dbStartTime.minutesAfterMidnight = 90;
+    dbStartTime.timezone = "America/Los_Angeles";
+    QVERIFY(source.insertStartTime(dbStartTime));
+    QVERIFY(program.id != dbStartTime.id);
+
+    TestClock clock(earlierOffset.addSecs(30));
+    Scheduler scheduler(&source, &clock);
+
+    QSignalSpy spy(&scheduler, &Scheduler::programDue);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+
+    // Still inside the same grace window: hasFired() blocks a second firing for the
+    // same resolved instant.
+    clock.advance(30);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+
+    // The second physical pass through the repeated local hour, an hour later:
+    // resolveToUtc() yields the same earlier instant again, well outside its grace
+    // window, so nothing new is recorded.
+    clock.setNowUtc(laterOffset.addSecs(30));
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+
+    QCOMPARE(firedInstantCount(source, program.id, dbStartTime.id), 1);
+    QVERIFY(source.hasFired(program.id, dbStartTime.id, earlierOffset));
+    QCOMPARE(outcomeFor(source, program.id, dbStartTime.id), QString("ran"));
 }
 
 void TestScheduler::aStartTimeDoesNotDriftAcrossDst()
