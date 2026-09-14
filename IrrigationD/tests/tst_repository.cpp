@@ -19,6 +19,7 @@ private slots:
     void updateZoneChangesNameAndEnabled();
     void updateZoneLandsCorrectlyWhenNumberDiffersFromId();
     void updateProgramChangesFields();
+    void updateProgramLeavesEveryOtherProgramIntact();
     void enabledProgramsExcludesDisabled();
     void settingValueRoundTrips();
     void setFiringOutcomeMatchesTheExactKeyOnly();
@@ -308,6 +309,65 @@ void TestRepository::updateProgramChangesFields()
     QCOMPARE(all.first().dowMask, 0x2A);
     QCOMPARE(all.first().intervalDays, 5);
     QCOMPARE(all.first().anchorDate, QDate(2026, 5, 1));
+}
+
+void TestRepository::updateProgramLeavesEveryOtherProgramIntact()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program low;
+    low.name = "Low";
+    low.enabled = true;
+    low.dayMode = Program::DayMode::DaysOfWeek;
+    low.dowMask = 0x05;
+    QVERIFY(source.insertProgram(low));
+
+    Program middle;
+    middle.name = "Middle";
+    middle.dayMode = Program::DayMode::Odd;
+    QVERIFY(source.insertProgram(middle));
+
+    Program high;
+    high.name = "High";
+    high.enabled = false;
+    high.dayMode = Program::DayMode::EveryNDays;
+    high.intervalDays = 4;
+    high.anchorDate = QDate(2027, 3, 4);
+    QVERIFY(source.insertProgram(high));
+
+    Program changed = middle;
+    changed.name = "Middle Renamed";
+    changed.enabled = false;
+    changed.dayMode = Program::DayMode::Even;
+    changed.dowMask = 0x2A;
+    changed.intervalDays = 6;
+    changed.anchorDate = QDate(2026, 7, 8);
+    QVERIFY(source.updateProgram(changed));
+
+    ProgramList all = source.allPrograms();
+    QCOMPARE(all.count(), 3);
+
+    QCOMPARE(all.at(0).id, low.id);
+    QCOMPARE(all.at(0).name, QString("Low"));
+    QCOMPARE(all.at(0).enabled, true);
+    QCOMPARE(all.at(0).dayMode, Program::DayMode::DaysOfWeek);
+    QCOMPARE(all.at(0).dowMask, 0x05);
+    QCOMPARE(all.at(0).intervalDays, 0);
+    QCOMPARE(all.at(0).anchorDate, QDate());
+
+    QCOMPARE(all.at(1).id, middle.id);
+    QCOMPARE(all.at(1).name, QString("Middle Renamed"));
+    QCOMPARE(all.at(1).dayMode, Program::DayMode::Even);
+
+    QCOMPARE(all.at(2).id, high.id);
+    QCOMPARE(all.at(2).name, QString("High"));
+    QCOMPARE(all.at(2).enabled, false);
+    QCOMPARE(all.at(2).dayMode, Program::DayMode::EveryNDays);
+    QCOMPARE(all.at(2).dowMask, 0);
+    QCOMPARE(all.at(2).intervalDays, 4);
+    QCOMPARE(all.at(2).anchorDate, QDate(2027, 3, 4));
 }
 
 void TestRepository::enabledProgramsExcludesDisabled()

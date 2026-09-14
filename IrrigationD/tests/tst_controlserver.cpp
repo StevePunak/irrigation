@@ -324,6 +324,96 @@ namespace
         }
         return result;
     }
+
+    QStringList reconcileReadFailureSql(const QString& programName)
+    {
+        return QStringList{
+            "ALTER TABLE program_start_times RENAME TO program_start_times_real",
+            QString("CREATE VIEW program_start_times AS SELECT id, program_id, "
+                    "CASE WHEN EXISTS (SELECT 1 FROM programs WHERE name = '%1') THEN json(timezone || '{') "
+                    "ELSE minutes_after_midnight END AS minutes_after_midnight, timezone "
+                    "FROM program_start_times_real").arg(programName),
+            "CREATE TRIGGER matrix_view_insert INSTEAD OF INSERT ON program_start_times BEGIN "
+            "INSERT INTO program_start_times_real (program_id, minutes_after_midnight, timezone) "
+            "VALUES (NEW.program_id, NEW.minutes_after_midnight, NEW.timezone); END",
+            "CREATE TRIGGER matrix_view_delete INSTEAD OF DELETE ON program_start_times BEGIN "
+            "DELETE FROM program_start_times_real WHERE id = OLD.id; END"
+        };
+    }
+
+    struct SeededProgram
+    {
+        Program program;
+        QList<ProgramStartTime> startTimes;
+        QList<ProgramZone> zones;
+    };
+
+    void compareProgramJsonWithSeed(const QJsonObject& got, const SeededProgram& seed)
+    {
+        QCOMPARE(got.value("id").toInt(), seed.program.id);
+        QCOMPARE(got.value("name").toString(), seed.program.name);
+        QCOMPARE(got.value("enabled").toBool(), seed.program.enabled);
+        QCOMPARE(got.value("dayMode").toString(), Program::dayModeToString(seed.program.dayMode));
+        QCOMPARE(got.value("dowMask").toInt(), seed.program.dowMask);
+        QCOMPARE(got.value("intervalDays").toInt(), seed.program.intervalDays);
+        QCOMPARE(got.value("anchorDate").toString(), seed.program.anchorDate.toString(Qt::ISODate));
+
+        const QJsonArray gotStartTimes = got.value("startTimes").toArray();
+        QCOMPARE(gotStartTimes.count(), seed.startTimes.count());
+        for(int i = 0; i < seed.startTimes.count(); i++) {
+            const QJsonObject gotStartTime = gotStartTimes.at(i).toObject();
+            QCOMPARE(gotStartTime.value("id").toInt(), seed.startTimes.at(i).id);
+            QCOMPARE(gotStartTime.value("minutesAfterMidnight").toInt(), seed.startTimes.at(i).minutesAfterMidnight);
+            QCOMPARE(gotStartTime.value("timezone").toString(), seed.startTimes.at(i).timezone);
+        }
+
+        const QJsonArray gotZones = got.value("zones").toArray();
+        QCOMPARE(gotZones.count(), seed.zones.count());
+        for(int i = 0; i < seed.zones.count(); i++) {
+            const QJsonObject gotZone = gotZones.at(i).toObject();
+            QCOMPARE(gotZone.value("id").toInt(), seed.zones.at(i).id);
+            QCOMPARE(gotZone.value("zoneId").toInt(), seed.zones.at(i).zoneId);
+            QCOMPARE(gotZone.value("sequence").toInt(), seed.zones.at(i).sequence);
+            QCOMPARE(gotZone.value("durationSeconds").toInt(), seed.zones.at(i).durationSeconds);
+        }
+    }
+
+    void compareStoredProgramWithSeed(IrrigationDataSource& source, const SeededProgram& seed)
+    {
+        const ProgramList programs = source.allPrograms();
+        Program stored;
+        for(const Program& candidate : programs) {
+            if(candidate.id == seed.program.id) {
+                stored = candidate;
+            }
+        }
+        QCOMPARE(stored.id, seed.program.id);
+        QCOMPARE(stored.name, seed.program.name);
+        QCOMPARE(stored.enabled, seed.program.enabled);
+        QCOMPARE(stored.dayMode, seed.program.dayMode);
+        QCOMPARE(stored.dowMask, seed.program.dowMask);
+        QCOMPARE(stored.intervalDays, seed.program.intervalDays);
+        QCOMPARE(stored.anchorDate, seed.program.anchorDate);
+
+        const ProgramStartTimeList storedStartTimes = source.startTimesFor(seed.program.id);
+        QCOMPARE(storedStartTimes.count(), seed.startTimes.count());
+        for(int i = 0; i < seed.startTimes.count(); i++) {
+            QCOMPARE(storedStartTimes.at(i).id, seed.startTimes.at(i).id);
+            QCOMPARE(storedStartTimes.at(i).programId, seed.program.id);
+            QCOMPARE(storedStartTimes.at(i).minutesAfterMidnight, seed.startTimes.at(i).minutesAfterMidnight);
+            QCOMPARE(storedStartTimes.at(i).timezone, seed.startTimes.at(i).timezone);
+        }
+
+        const ProgramZoneList storedZones = source.zonesFor(seed.program.id);
+        QCOMPARE(storedZones.count(), seed.zones.count());
+        for(int i = 0; i < seed.zones.count(); i++) {
+            QCOMPARE(storedZones.at(i).id, seed.zones.at(i).id);
+            QCOMPARE(storedZones.at(i).programId, seed.program.id);
+            QCOMPARE(storedZones.at(i).zoneId, seed.zones.at(i).zoneId);
+            QCOMPARE(storedZones.at(i).sequence, seed.zones.at(i).sequence);
+            QCOMPARE(storedZones.at(i).durationSeconds, seed.zones.at(i).durationSeconds);
+        }
+    }
 }
 
 class TestControlServer : public QObject
@@ -416,6 +506,8 @@ private slots:
     void programPutAnswers500WhenTheFirstOfTwoStartTimeInsertsFails();
     void programPutWriteStepFailureAnswersErrorAndLeavesTheProgramStanding_data();
     void programPutWriteStepFailureAnswersErrorAndLeavesTheProgramStanding();
+    void programPutWithEmptyZonesRemovesEveryStoredZone();
+    void programPutChangesOnlyItsOwnProgramAndReportsStoredZoneIds();
 
     void programsGetReportsEmptyNextRunUtcForADisabledProgram();
 
@@ -3136,6 +3228,9 @@ void TestControlServer::programPutWriteStepFailureAnswersErrorAndLeavesTheProgra
     QTest::newRow("commitTransaction")
         << commitFailureTriggerSql(830)
         << body << 500;
+    QTest::newRow("startTimesFor read in reconcile")
+        << reconcileReadFailureSql("Attempt")
+        << body << 500;
     QTest::newRow("zoneIdsAreKnown with the second zoneId unknown")
         << QStringList{}
         << daysOfWeekProgramBody("Attempt", 12, false, startTimes,
@@ -3267,6 +3362,153 @@ void TestControlServer::programPutWriteStepFailureAnswersErrorAndLeavesTheProgra
     const QJsonArray followUpZones = followUp.value("zones").toArray();
     QCOMPARE(followUpZones.count(), 1);
     QCOMPARE(followUpZones.at(0).toObject().value("durationSeconds").toInt(), 970);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programPutWithEmptyZonesRemovesEveryStoredZone()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    Program program;
+    program.name = "Emptied";
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 3;
+    ProgramStartTime startTime; startTime.minutesAfterMidnight = 400; startTime.timezone = "UTC";
+    QList<ProgramStartTime> startTimes{ startTime };
+    ProgramZone firstZone; firstZone.zoneId = 1; firstZone.sequence = 0; firstZone.durationSeconds = 510;
+    ProgramZone secondZone; secondZone.zoneId = 2; secondZone.sequence = 1; secondZone.durationSeconds = 520;
+    QList<ProgramZone> zones{ firstZone, secondZone };
+    QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = putJson(manager, server.boundPort(), QString("/admin/programs/%1").arg(program.id),
+                                   daysOfWeekProgramBody("Emptied", 3, true, QJsonArray{ utcStartTimeJson(400) },
+                                                         QJsonArray{}));
+    QCOMPARE(statusCode(reply), 200);
+    QCOMPARE(QJsonDocument::fromJson(reply->readAll()).object().value("zones").toArray().count(), 0);
+
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject got = programObjectWithId(QJsonDocument::fromJson(getReply->readAll()).array(), program.id);
+    QCOMPARE(got.value("id").toInt(), program.id);
+    QCOMPARE(got.value("zones").toArray().count(), 0);
+    QCOMPARE(got.value("startTimes").toArray().count(), 1);
+    QCOMPARE(got.value("startTimes").toArray().at(0).toObject().value("id").toInt(), startTimes.at(0).id);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        QCOMPARE(verify.zonesFor(program.id).count(), 0);
+        QCOMPARE(tableRowCount(verify, "program_zones"), 0);
+    }
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programPutChangesOnlyItsOwnProgramAndReportsStoredZoneIds()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    SeededProgram low;
+    low.program.name = "Low";
+    low.program.enabled = true;
+    low.program.dayMode = Program::DayMode::DaysOfWeek;
+    low.program.dowMask = 5;
+    ProgramStartTime lowFirst; lowFirst.minutesAfterMidnight = 410; lowFirst.timezone = "UTC";
+    ProgramStartTime lowSecond; lowSecond.minutesAfterMidnight = 411; lowSecond.timezone = "America/Denver";
+    low.startTimes = { lowFirst, lowSecond };
+    ProgramZone lowZoneA; lowZoneA.zoneId = 1; lowZoneA.sequence = 0; lowZoneA.durationSeconds = 510;
+    ProgramZone lowZoneB; lowZoneB.zoneId = 2; lowZoneB.sequence = 1; lowZoneB.durationSeconds = 511;
+    low.zones = { lowZoneA, lowZoneB };
+    QVERIFY(seedProgramDirect(dbPath, low.program, low.startTimes, low.zones));
+
+    SeededProgram middle;
+    middle.program.name = "Middle";
+    middle.program.enabled = true;
+    middle.program.dayMode = Program::DayMode::Odd;
+    ProgramStartTime middleFirst; middleFirst.minutesAfterMidnight = 610; middleFirst.timezone = "UTC";
+    ProgramStartTime middleSecond; middleSecond.minutesAfterMidnight = 611; middleSecond.timezone = "UTC";
+    middle.startTimes = { middleFirst, middleSecond };
+    ProgramZone middleZoneA; middleZoneA.zoneId = 3; middleZoneA.sequence = 0; middleZoneA.durationSeconds = 620;
+    ProgramZone middleZoneB; middleZoneB.zoneId = 4; middleZoneB.sequence = 1; middleZoneB.durationSeconds = 621;
+    middle.zones = { middleZoneA, middleZoneB };
+    QVERIFY(seedProgramDirect(dbPath, middle.program, middle.startTimes, middle.zones));
+
+    SeededProgram high;
+    high.program.name = "High";
+    high.program.enabled = false;
+    high.program.dayMode = Program::DayMode::EveryNDays;
+    high.program.intervalDays = 4;
+    high.program.anchorDate = QDate(2027, 3, 4);
+    ProgramStartTime highFirst; highFirst.minutesAfterMidnight = 810; highFirst.timezone = "UTC";
+    ProgramStartTime highSecond; highSecond.minutesAfterMidnight = 811; highSecond.timezone = "America/Chicago";
+    high.startTimes = { highFirst, highSecond };
+    ProgramZone highZoneA; highZoneA.zoneId = 5; highZoneA.sequence = 0; highZoneA.durationSeconds = 910;
+    ProgramZone highZoneB; highZoneB.zoneId = 6; highZoneB.sequence = 1; highZoneB.durationSeconds = 911;
+    high.zones = { highZoneA, highZoneB };
+    QVERIFY(seedProgramDirect(dbPath, high.program, high.startTimes, high.zones));
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = putJson(manager, server.boundPort(), QString("/admin/programs/%1").arg(middle.program.id),
+                                   daysOfWeekProgramBody("Middle After", 42, false,
+                                                         QJsonArray{ utcStartTimeJson(610), utcStartTimeJson(700) },
+                                                         QJsonArray{ programZoneJson(7, 0, 750), programZoneJson(8, 1, 760) }));
+    QCOMPARE(statusCode(reply), 200);
+    const QJsonArray responseZones = QJsonDocument::fromJson(reply->readAll()).object().value("zones").toArray();
+
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonArray programs = QJsonDocument::fromJson(getReply->readAll()).array();
+    QCOMPARE(programs.count(), 3);
+
+    const QJsonObject gotMiddle = programObjectWithId(programs, middle.program.id);
+    QCOMPARE(gotMiddle.value("name").toString(), QString("Middle After"));
+    QCOMPARE(gotMiddle.value("enabled").toBool(), false);
+    QCOMPARE(gotMiddle.value("dayMode").toString(), QString("DaysOfWeek"));
+    QCOMPARE(gotMiddle.value("dowMask").toInt(), 42);
+    const QJsonArray gotMiddleStartTimes = gotMiddle.value("startTimes").toArray();
+    QCOMPARE(gotMiddleStartTimes.count(), 2);
+    QCOMPARE(gotMiddleStartTimes.at(0).toObject().value("id").toInt(), middle.startTimes.at(0).id);
+    QCOMPARE(gotMiddleStartTimes.at(1).toObject().value("minutesAfterMidnight").toInt(), 700);
+    const QJsonArray gotMiddleZones = gotMiddle.value("zones").toArray();
+    QCOMPARE(gotMiddleZones.count(), 2);
+    QCOMPARE(gotMiddleZones.at(0).toObject().value("durationSeconds").toInt(), 750);
+    QCOMPARE(gotMiddleZones.at(1).toObject().value("durationSeconds").toInt(), 760);
+
+    QCOMPARE(responseZones.count(), gotMiddleZones.count());
+    for(int i = 0; i < gotMiddleZones.count(); i++) {
+        QVERIFY(gotMiddleZones.at(i).toObject().value("id").toInt() > 0);
+        QCOMPARE(responseZones.at(i).toObject().value("id").toInt(), gotMiddleZones.at(i).toObject().value("id").toInt());
+    }
+
+    compareProgramJsonWithSeed(programObjectWithId(programs, low.program.id), low);
+    if(QTest::currentTestFailed() == true) {
+        return;
+    }
+    compareProgramJsonWithSeed(programObjectWithId(programs, high.program.id), high);
+    if(QTest::currentTestFailed() == true) {
+        return;
+    }
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        compareStoredProgramWithSeed(verify, low);
+        if(QTest::currentTestFailed() == true) {
+            return;
+        }
+        compareStoredProgramWithSeed(verify, high);
+        if(QTest::currentTestFailed() == true) {
+            return;
+        }
+    }
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
 }
