@@ -4,13 +4,15 @@
 
 #include "database/irrigationdatasource.h"
 
+const TimeSpan Scheduler::TickInterval = TimeSpan::fromSeconds(1);
+
 Scheduler::Scheduler(IrrigationDataSource* source, IClock* clock, QObject* parent) :
     QObject(parent),
     LoggingBaseClass("scheduler"),
     _source(source),
     _clock(clock)
 {
-    _tickTimer.setInterval(1000);
+    _tickTimer.setInterval(static_cast<int>(TickInterval.totalMilliseconds()));
     connect(&_tickTimer, &QTimer::timeout, this, &Scheduler::tick);
 }
 

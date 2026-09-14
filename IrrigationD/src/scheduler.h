@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QTimer>
 
+#include <Kanoop/timespan.h>
 #include <Kanoop/utility/loggingbaseclass.h>
 
 #include "iclock.h"
@@ -70,6 +71,7 @@ private:
     /** @brief Returns a best-effort UTC instant for a start time that failed to resolve, for the Missed audit row. */
     static QDateTime missedInstantFor(const ProgramStartTime& startTime, const QDate& localDate);
 
+    static const TimeSpan TickInterval;
     static constexpr qint64 GraceWindowSeconds = 120;
     static constexpr int HorizonDays = 366;
 

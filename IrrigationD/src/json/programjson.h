@@ -27,8 +27,11 @@ public:
     /**
      * @brief Parses a program draft payload into its program, start-time and zone parts.
      *
-     * Rejects a dayMode that is not one of the four registered names, and a
-     * minutesAfterMidnight outside 0..1439.
+     * Rejects a dayMode that is not one of the four registered names, a
+     * minutesAfterMidnight outside 0..1439, an EveryNDays rule without an
+     * intervalDays of at least 1 and a valid anchorDate, a DaysOfWeek dowMask that
+     * is zero or sets a bit outside the seven days, and an enabled that is present
+     * but not a boolean. An absent enabled means true.
      * @param errorMessage Set to a human-readable reason when parsing fails.
      * @return True when @p object matched the contract and every value validated.
      */
@@ -51,6 +54,7 @@ private:
     static QString dateToJson(const QDate& value);
 
     static const QStringList ValidDayModeNames;
+    static constexpr int AllDaysOfWeekMask = 0x7F;
 };
 
 #endif // PROGRAMJSON_H

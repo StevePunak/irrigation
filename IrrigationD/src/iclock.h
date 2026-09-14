@@ -3,7 +3,7 @@
 
 #include <QDateTime>
 
-/** @brief Source of the current instant. Injected so schedules can be tested without waiting. */
+/** @brief Source of the current instant. */
 class IClock
 {
 public:

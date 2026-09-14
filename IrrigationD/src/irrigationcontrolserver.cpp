@@ -164,11 +164,15 @@ void IrrigationControlServer::threadStarted()
     if(_tcpServer->listen(QHostAddress(_bindAddress), _listenPort) == false) {
         logText(LVL_ERROR, QString("Failed to listen on %1:%2 - %3")
                                .arg(_bindAddress).arg(_listenPort).arg(_tcpServer->errorString()));
+        delete _tcpServer;
+        _tcpServer = nullptr;
         return;
     }
 
     if(_httpServer->bind(_tcpServer) == false) {
         logText(LVL_ERROR, "Failed to bind the HTTP server to the listening socket");
+        delete _tcpServer;
+        _tcpServer = nullptr;
         return;
     }
 
@@ -181,6 +185,9 @@ void IrrigationControlServer::threadAboutToFinish()
 {
     logText(LVL_INFO, "Control server thread finishing");
 
+    _ready.storeRelease(0);
+    _readyEvent.clear();
+
     delete _httpServer;
     _httpServer = nullptr;
 
@@ -189,9 +196,6 @@ void IrrigationControlServer::threadAboutToFinish()
 
     delete _source;
     _source = nullptr;
-
-    _ready.storeRelease(0);
-    _readyEvent.clear();
 }
 
 QHttpServerResponse IrrigationControlServer::handleHealth(const QHttpServerRequest& request)

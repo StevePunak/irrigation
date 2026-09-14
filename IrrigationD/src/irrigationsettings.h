@@ -20,6 +20,9 @@ public:
     /** @brief Constructs settings backed by the INI file at @p path. */
     explicit IrrigationSettings(const QString& path);
 
+    /** @brief Returns the INI key holding the zone map. */
+    static QString zonesKey() { return KEY_ZONES; }
+
     /** @brief Returns the zone number to GPIO line offset map. Malformed entries are dropped. */
     QMap<int, quint32> zoneGpioMap() const;
 

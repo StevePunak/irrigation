@@ -17,6 +17,8 @@
 #include <QTimeZone>
 #include <QTimer>
 
+const TimeSpan IrrigationDaemon::StatusInterval = TimeSpan::fromSeconds(1);
+
 IrrigationDaemon::IrrigationDaemon(const QString& settingsPath) :
     AbstractThreadClass("daemon"),
     _settingsPath(settingsPath),
@@ -43,6 +45,12 @@ void IrrigationDaemon::threadStarted()
 
         _settings = new IrrigationSettings(_settingsPath);
 
+        const QMap<int, quint32> zoneGpioMap = _settings->zoneGpioMap();
+        if(zoneGpioMap.isEmpty()) {
+            throw CommonException(QString("%1 is empty or missing in %2")
+                                  .arg(IrrigationSettings::zonesKey(), _settingsPath));
+        }
+
         _backend = new LibGpiodBackend();
         if(_backend->openChipByLabel(_settings->chipLabel()) == false) {
             throw CommonException(QString("Failed to open GPIO chip '%1': %2")
@@ -50,7 +58,7 @@ void IrrigationDaemon::threadStarted()
         }
 
         _zoneController = new ZoneController(_backend,
-                                             _settings->zoneGpioMap(),
+                                             zoneGpioMap,
                                              _settings->zoneActiveLow(),
                                              _settings->maxZoneSeconds());
         if(_zoneController->begin() == false) {
@@ -85,7 +93,7 @@ void IrrigationDaemon::threadStarted()
         _controlServer->setListenPort(_settings->listenPort());
 
         _statusTimer = new QTimer();
-        _statusTimer->setInterval(StatusIntervalMilliseconds);
+        _statusTimer->setInterval(static_cast<int>(StatusInterval.totalMilliseconds()));
 
         connectComponents();
 
@@ -320,23 +328,28 @@ void IrrigationDaemon::publishStatus()
     ServerStatus status;
     status.runningZone = _zoneController->openZoneNumber();
     status.secondsRemaining = _zoneController->secondsRemaining();
-    status.nextRunUtc = nextScheduledRunUtc(nowUtc);
     status.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
     status.masterEnabled = _dataSource->isMasterEnabled();
+    status.stopHeld = _stopButton->isHeld();
     status.rainDelayUntilUtc =
         QDateTime::fromString(_dataSource->settingValue("rain_delay_until"), Qt::ISODate).toUTC();
+
+    if(status.masterEnabled == true) {
+        const bool rainDelayed = status.rainDelayUntilUtc.isValid() && nowUtc < status.rainDelayUntilUtc;
+        status.nextRunUtc = nextScheduledRunUtc(rainDelayed == true ? status.rainDelayUntilUtc : nowUtc);
+    }
 
     _controlServer->updateStatus(status);
 }
 
-QDateTime IrrigationDaemon::nextScheduledRunUtc(const QDateTime& nowUtc)
+QDateTime IrrigationDaemon::nextScheduledRunUtc(const QDateTime& fromUtc)
 {
     QDateTime earliest;
 
     const ProgramList programs = _dataSource->enabledPrograms();
     for(const Program& program : programs) {
         const QDateTime candidate =
-            Scheduler::nextRunUtc(program, _dataSource->startTimesFor(program.id), nowUtc);
+            Scheduler::nextRunUtc(program, _dataSource->startTimesFor(program.id), fromUtc);
         if(candidate.isValid() && (earliest.isValid() == false || candidate < earliest)) {
             earliest = candidate;
         }

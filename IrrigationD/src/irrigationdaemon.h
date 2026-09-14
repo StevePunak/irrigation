@@ -3,6 +3,7 @@
 
 #include "iclock.h"
 
+#include <Kanoop/timespan.h>
 #include <Kanoop/utility/abstractthreadclass.h>
 
 #include <QDateTime>
@@ -85,10 +86,10 @@ private:
     /** @brief Returns whether @p zoneNumber has a zones row with enabled set. False when no row matches. */
     bool isZoneEnabled(int zoneNumber);
 
-    /** @brief Returns the earliest UTC instant at which any enabled program is next due. */
-    QDateTime nextScheduledRunUtc(const QDateTime& nowUtc);
+    /** @brief Returns the earliest UTC instant at or after @p fromUtc at which any enabled program is due. */
+    QDateTime nextScheduledRunUtc(const QDateTime& fromUtc);
 
-    static constexpr int StatusIntervalMilliseconds = 1000;
+    static const TimeSpan StatusInterval;
     static constexpr int ControlServerReadySeconds = 10;
     static constexpr int FiredInstantRetentionDays = 90;
 

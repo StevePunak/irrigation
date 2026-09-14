@@ -30,6 +30,7 @@ struct ServerStatus
     QDateTime nextRunUtc;
     QString timezone;
     bool masterEnabled = false;
+    bool stopHeld = false;
     QDateTime rainDelayUntilUtc;
 };
 
@@ -62,22 +63,10 @@ public:
     /** @brief Sets the port the listener binds to. Zero picks an ephemeral port. Call before start(). */
     void setListenPort(int value) { _listenPort = value; }
 
-    /**
-     * @brief Publishes a new status snapshot for GET /admin/status to serve.
-     *
-     * Safe to call from any thread: delivery to the worker thread happens through a
-     * queued signal, so the served snapshot is only ever written on the thread that
-     * also serves GET /admin/status.
-     */
+    /** @brief Publishes a new status snapshot for GET /admin/status to serve. Safe to call from any thread. */
     void updateStatus(const ServerStatus& status) { emit statusUpdateRequested(status); }
 
-    /**
-     * @brief Blocks until the listener has bound, or the timeout elapses.
-     *
-     * start() reports that the worker thread is running. The listener's bound port
-     * is known only once threadStarted() has run on that thread; call this
-     * afterward to learn when the listener itself is ready.
-     */
+    /** @brief Blocks until the listener has bound or @p timeout elapses. @return True once the listener is bound. */
     bool waitUntilReady(const TimeSpan& timeout);
 
     /** @brief Returns the port the listener bound to. Valid only after waitUntilReady() returns true. */

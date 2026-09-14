@@ -88,9 +88,15 @@ bool ProgramJson::fromJson(const QJsonObject& object,
         return false;
     }
 
+    const QJsonValue enabled = object.value("enabled");
+    if(enabled.isUndefined() == false && enabled.isBool() == false) {
+        errorMessage = "enabled must be a boolean";
+        return false;
+    }
+
     Program parsedProgram;
     parsedProgram.name = object.value("name").toString();
-    parsedProgram.enabled = object.value("enabled").toBool(true);
+    parsedProgram.enabled = enabled.toBool(true);
     parsedProgram.dayMode = Program::dayModeFromString(dayModeName);
     parsedProgram.dowMask = object.value("dowMask").toInt(0);
     parsedProgram.intervalDays = object.value("intervalDays").toInt(0);
@@ -100,6 +106,24 @@ bool ProgramJson::fromJson(const QJsonObject& object,
         parsedProgram.anchorDate = QDate::fromString(anchor.toString(), Qt::ISODate);
         if(parsedProgram.anchorDate.isValid() == false) {
             errorMessage = "anchorDate must be an ISO 8601 date";
+            return false;
+        }
+    }
+
+    if(parsedProgram.dayMode == Program::DayMode::EveryNDays) {
+        if(parsedProgram.intervalDays < 1) {
+            errorMessage = "EveryNDays requires an intervalDays of at least 1";
+            return false;
+        }
+        if(parsedProgram.anchorDate.isValid() == false) {
+            errorMessage = "EveryNDays requires an anchorDate";
+            return false;
+        }
+    }
+
+    if(parsedProgram.dayMode == Program::DayMode::DaysOfWeek) {
+        if(parsedProgram.dowMask == 0 || (parsedProgram.dowMask & ~AllDaysOfWeekMask) != 0) {
+            errorMessage = "DaysOfWeek requires a dowMask naming at least one day and no bit outside the seven days";
             return false;
         }
     }

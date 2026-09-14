@@ -10,6 +10,7 @@ QJsonObject StatusJson::toJson(const ServerStatus& status)
     object["nextRunUtc"] = instantToJson(status.nextRunUtc);
     object["timezone"] = status.timezone;
     object["masterEnabled"] = status.masterEnabled;
+    object["stopHeld"] = status.stopHeld;
     object["rainDelayUntilUtc"] = instantToJson(status.rainDelayUntilUtc);
     return object;
 }
