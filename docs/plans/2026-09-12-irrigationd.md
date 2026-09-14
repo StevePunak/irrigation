@@ -4012,7 +4012,7 @@ in-memory backend certifies independently of the kernel.
 | §5.1 | Watchdog verifying against a **read-back**, not the cache | 1, 5 |
 | §5.1 | `allOff()` callable from anywhere, always takes precedence | 5, 10 |
 | §5.1 | Construction order: valves de-energised before scheduler or server exist | 10 |
-| §5.2 | Valve owner and scheduler on the main event loop | 10 |
+| §5.2 | Valve owner and scheduler share one owning thread, the daemon worker (departure 1) | 10 |
 | §5.2 | Anything blocking or listening is an `AbstractThreadClass` | 9 |
 | §5.2 | Route handlers emit rather than calling `ZoneController` | 9, 10 |
 | §5.2 | Control server opens its own named DB connection | 9 |
@@ -4044,24 +4044,61 @@ in-memory backend certifies independently of the kernel.
 
 ### Deliberate departures from the spec
 
-**1. `IrrigationSettings` does not derive `AppSettings`.** Spec §5 lists
-`settings.{h,cpp}` as a `Kanoop::AppSettings` subclass. `AppSettings` builds its
-own `QSettings` from the organisation and application name, which makes it
-impossible to point at a temporary file, so every settings test would mutate the
-developer's real config. This class holds a `QSettings` constructed from an
-explicit path instead. Nothing in the daemon wants the recent-files or
-last-directory machinery `AppSettings` exists to provide.
+**1. Components live on the daemon worker thread (§5.2).** §5.2 places
+`ZoneController` and `Scheduler` on the main event loop. `IrrigationDaemon` is an
+`AbstractThreadClass` that creates every component in `threadStarted()`, so the
+valves, the stop button, the scheduler, the runner and the daemon's slots share the
+daemon worker thread, and valve state keeps a single owning thread.
 
-**2. `ProgramRunner` is tested against a real `ZoneController`, not a fake.**
-Spec §10 says a fake. A real controller over a `MockBackend` is cheap, already
-has its own tests, and cannot drift from the interface the runner calls — which a
-hand-written fake does the first time a signature changes. The
-`expireCloseTimerForTest()` seam is what makes it fast enough to prefer.
+**2. Two more firing outcomes, `skipped_stop` and `failed` (§6).** §6 lists four
+outcomes. A firing that comes due while the stop button is held is recorded
+`skipped_stop`, and one whose program could not open its first zone is recorded
+`failed`, so every row states what happened to that firing.
+
+**3. Busy includes an open zone with no program running (§5.5).** §5.5 skips a start
+time while another program runs. A start time that comes due while a manually opened
+zone is running is also recorded `skipped_busy`, so a schedule never cuts a manual
+run short.
+
+**4. Zone routes key on zone number (§7).** §7 writes `PUT /admin/zones/{id}`.
+`PUT /admin/zones/{number}` and `POST /admin/zones/{number}/run` take the manifold
+number 1-8, the identifier the web client and the INI zone map both use.
+
+**5. `GET /admin/programs` carries a per-program `nextRunUtc` (§7).** Each program
+object reports its own next occurrence, so the Programs screen shows when each one
+runs next.
+
+**6. Manual runs go ahead during a rain delay (§5.4).** The rain delay gates the
+scheduler only. The stop button and the master enable still refuse manual zone and
+program runs.
+
+**7. Disabled zones are skipped.** §6 names `zones.enabled` without defining it. A
+disabled zone never waters: `ProgramRunner` skips it with a warning and moves to the
+next zone, `POST /admin/zones/{number}/run` answers 409, and the daemon refuses a
+manual run of it.
+
+**8. The effective zone ceiling is `min(database, INI)` (§5.1, §6).** The INI
+`limits/maxZoneSeconds` is the installer's hard ceiling and the database
+`max_zone_seconds` is the user's. Each `openZone()` clamps to the smaller; an absent
+or unparsable database value means the INI value, and a changed value applies from
+the next zone opened. The database `log_level` is applied at startup and after every
+settings change unless `--verbose` was given.
+
+**9. `/admin/status` carries `stopHeld` (§7).** The boolean reports the stop button's
+held state, so the Now screen can explain a refused run.
+
+**10. The stop button acts on the logical rising edge (§5.6).** §5.6 specifies
+falling-edge detection. The line is requested active-low with pull-up and both edges;
+a press is the logical rising edge, the §4.3 convention for `InputPin::asserted()`,
+and the release edge keeps `StopButton::isHeld()` current.
+
+**11. `ProgramRunner` is tested against a real `ZoneController` (§10).** §10 says a
+fake. A real controller over a `MockBackend` is cheap, already has its own tests, and
+cannot drift from the interface the runner calls, which a hand-written fake does the
+first time a signature changes. The `expireCloseTimerForTest()` seam keeps those
+tests fast.
 
 ### Known gaps
 
-- The `log_level` row in the `settings` table is written by the schema and read
-  by nothing. Either wire it into `Log::setLevel()` at startup in Task 10 or drop
-  the row; leaving a setting that silently does nothing is worse than either.
 - `/admin/version` returns the compiled version only. There is no build-identity
   string (git SHA, build date) because nothing generates one yet.
