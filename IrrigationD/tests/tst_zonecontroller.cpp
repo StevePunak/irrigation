@@ -58,6 +58,7 @@ private slots:
     void closeRetryLandsWithinTwoRetryIntervals();
     void allOffRetryLandsWithinOneRetryInterval();
     void latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanOne();
+    void latchStaysSetAcrossRepeatedFailedReadsAndClearsOnAMatchingOne();
     void watchdogTripsWhenTheOpenZonesLineDropsOut();
     void watchdogTripsWhenAForeignLineEnergisesWithAZoneOpen();
     void maxZoneSecondsNeverRisesPastTheHardCeiling();
@@ -452,6 +453,41 @@ void TestZoneController::latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanO
     QVERIFY(controller.isFaulted() == false);
     QVERIFY(controller.openZone(6, 823));
     QCOMPARE(controller.openZoneNumber(), 6);
+}
+
+void TestZoneController::latchStaysSetAcrossRepeatedFailedReadsAndClearsOnAMatchingOne()
+{
+    FaultBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    controller.setWatchdogInterval(TimeSpan::fromSeconds(60));
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(8, 853));
+
+    QSignalSpy trippedSpy(&controller, &ZoneController::watchdogTripped);
+    backend.failRead = true;
+    controller.triggerWatchdogForTest();
+    QCOMPARE(trippedSpy.count(), 1);
+    QCOMPARE(trippedSpy.at(0).at(0).toInt(), 8);
+    QVERIFY(controller.isFaulted());
+    QCOMPARE(controller.openZoneNumber(), 0);
+
+    for(int i = 0; i < 3; i++) {
+        controller.triggerWatchdogForTest();
+        QVERIFY(controller.isFaulted());
+        QCOMPARE(trippedSpy.count(), i + 2);
+        QVERIFY(controller.openZone(7, 857) == false);
+        QCOMPARE(backend.lineValue(20), Gpio::Value::Inactive);
+    }
+
+    backend.failRead = false;
+    controller.triggerWatchdogForTest();
+
+    QVERIFY(controller.isFaulted() == false);
+    QCOMPARE(trippedSpy.count(), 4);
+    QVERIFY(controller.openZone(7, 857));
+    QCOMPARE(controller.openZoneNumber(), 7);
 }
 
 void TestZoneController::watchdogTripsWhenTheOpenZonesLineDropsOut()
