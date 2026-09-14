@@ -54,4 +54,5 @@ time is a wall-clock rule with no instant behind it and is converted by
 
 `dowMask` bit 0 is **Monday**, bit 6 is Sunday — `QDate::dayOfWeek()` minus one.
 `dayMode` strings are `DaysOfWeek`, `Odd`, `Even`, `EveryNDays`, taken verbatim
-from `Program::dayModeToString()` in `IrrigationD/src/model/program.cpp`.
+from the `DayModeToStringMap` behind `Program::dayModeToString()`, in
+`IrrigationD/src/model/program.h`.

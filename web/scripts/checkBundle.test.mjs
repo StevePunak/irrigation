@@ -1,14 +1,23 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { checkBundleDir, scanForExternalOrigins } from './checkBundle.mjs'
+
+const temporaryDirs = []
+
+afterEach(() => {
+  for (const dir of temporaryDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 function bundle(files) {
   const dir = mkdtempSync(join(tmpdir(), 'irrigation-bundle-'))
+  temporaryDirs.push(dir)
   for (const [name, content] of Object.entries(files)) {
     const path = join(dir, name)
     mkdirSync(join(path, '..'), { recursive: true })
@@ -41,6 +50,27 @@ describe('scanForExternalOrigins', () => {
     expect(scanForExternalOrigins('fetch("https://api.weather.example.com/v1")')).toContain(
       'https://api.weather.example.com',
     )
+  })
+
+  it('finds a host given as an ip address, with or without a port', () => {
+    expect(scanForExternalOrigins('fetch("http://203.0.113.5/api")')).toContain('http://203.0.113.5')
+    expect(scanForExternalOrigins('fetch("http://192.168.1.50:8080/api")')).toContain('http://192.168.1.50:8080')
+  })
+
+  it('finds a development-machine url on localhost', () => {
+    expect(scanForExternalOrigins('fetch("http://localhost:8080/admin/status")')).toContain('http://localhost:8080')
+  })
+
+  it('finds a websocket origin', () => {
+    expect(scanForExternalOrigins('new WebSocket("ws://192.168.1.50:9000/socket")')).toContain('ws://192.168.1.50:9000')
+  })
+
+  it('ignores a protocol-relative double slash with no dotted host after it', () => {
+    expect(scanForExternalOrigins('const separator = "//section"')).toEqual([])
+  })
+
+  it('matches the allowlist regardless of letter case', () => {
+    expect(scanForExternalOrigins('<svg xmlns="HTTP://WWW.W3.ORG/2000/svg"></svg>')).toEqual([])
   })
 
   it('allows the XML namespace urls that svg markup carries', () => {
@@ -121,6 +151,7 @@ describe('checkBundleDir', () => {
 describe('the build-step command', () => {
   function copyCommand() {
     const dir = mkdtempSync(join(tmpdir(), 'irrigation bundle command '))
+    temporaryDirs.push(dir)
     for (const name of ['checkBundle.mjs', 'checkBundleCli.mjs']) {
       copyFileSync(fileURLToPath(new URL(name, import.meta.url)), join(dir, name))
     }

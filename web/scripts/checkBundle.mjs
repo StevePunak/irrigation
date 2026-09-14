@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-const URL_PATTERN = /((?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,})([^\s"'`()<>]*)/gi
+const URL_PATTERN = /((?:https?|wss?):\/\/[a-z0-9.-]+(?::\d+)?|\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?)([^\s"'`()<>]*)/gi
 
 /** Matched against the whole url, so every entry must end in "/" or a lookalike host passes. */
 const ALLOWED_PREFIXES = ['http://www.w3.org/', 'https://www.w3.org/', 'https://react.dev/errors/']
@@ -12,7 +12,8 @@ const SCANNED_EXTENSIONS = ['.html', '.js', '.mjs', '.css', '.json', '.svg']
 export function scanForExternalOrigins(text) {
   const found = new Set()
   for (const match of text.matchAll(URL_PATTERN)) {
-    if (ALLOWED_PREFIXES.some((allowed) => match[0].startsWith(allowed))) {
+    const url = match[0].toLowerCase()
+    if (ALLOWED_PREFIXES.some((allowed) => url.startsWith(allowed))) {
       continue
     }
     found.add(match[1])
