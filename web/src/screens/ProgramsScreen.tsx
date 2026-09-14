@@ -6,7 +6,7 @@ import { formatDayAndClock, formatDuration, minutesToClock } from '../time/zoned
 import ProgramEditor from './ProgramEditor'
 import type { ScreenProps } from './screenProps'
 
-export default function ProgramsScreen({ status }: ScreenProps) {
+export default function ProgramsScreen({ status, refresh }: ScreenProps) {
   const [programs, setPrograms] = useState<Program[] | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -48,13 +48,17 @@ export default function ProgramsScreen({ status }: ScreenProps) {
     [load],
   )
 
-  const onRun = useCallback(async (program: Program) => {
-    try {
-      await runProgram(program.id)
-    } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [])
+  const onRun = useCallback(
+    async (program: Program) => {
+      try {
+        await runProgram(program.id)
+        refresh()
+      } catch (caught: unknown) {
+        setError(caught instanceof Error ? caught.message : String(caught))
+      }
+    },
+    [refresh],
+  )
 
   const controllerZone = status?.timezone ?? ''
 

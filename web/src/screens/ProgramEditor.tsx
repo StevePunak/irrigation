@@ -31,6 +31,9 @@ export function validationError(draft: ProgramDraft): string | null {
   if (draft.startTimes.length === 0) {
     return 'Add at least one start time.'
   }
+  if (draft.startTimes.some((start) => start.timezone.length === 0)) {
+    return 'The controller timezone is not known yet. Save again once the controller answers.'
+  }
   if (draft.zones.length === 0) {
     return 'Add at least one zone.'
   }
@@ -93,7 +96,14 @@ export default function ProgramEditor({
       return
     }
     // Sequence numbers in `draft.zones` are stale between edits; onSave is what makes them match array order.
-    const normalised: ProgramDraft = { ...draft, name: draft.name.trim(), zones: resequence(draft.zones) }
+    const normalised: ProgramDraft = {
+      ...draft,
+      name: draft.name.trim(),
+      startTimes: draft.startTimes.map((start) =>
+        start.timezone.length === 0 ? { ...start, timezone: controllerZone } : start,
+      ),
+      zones: resequence(draft.zones),
+    }
     const invalid = validationError(normalised)
     if (invalid !== null) {
       setError(invalid)
@@ -113,7 +123,7 @@ export default function ProgramEditor({
     } finally {
       setSaving(false)
     }
-  }, [draft, startTimeText, program, onDone])
+  }, [draft, startTimeText, program, controllerZone, onDone])
 
   const onDelete = useCallback(async () => {
     if (program === null) {

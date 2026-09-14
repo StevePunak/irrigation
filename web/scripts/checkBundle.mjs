@@ -8,6 +8,8 @@ const ALLOWED_PREFIXES = ['http://www.w3.org/', 'https://www.w3.org/', 'https://
 
 const SCANNED_EXTENSIONS = ['.html', '.js', '.mjs', '.css', '.json', '.svg']
 
+const DAEMON_PREFIX = '/admin'
+
 /** Returns every remote origin referenced in `text`, deduplicated. */
 export function scanForExternalOrigins(text) {
   const found = new Set()
@@ -56,11 +58,14 @@ export function checkBundleDir(dir) {
       continue
     }
 
-    const origins = scanForExternalOrigins(readFileSync(path, 'utf8'))
-    for (const origin of origins) {
+    const text = readFileSync(path, 'utf8')
+    for (const origin of scanForExternalOrigins(text)) {
       problems.push(
         `${relative(dir, path)} references ${origin} — the controller has no internet and the request will hang`,
       )
+    }
+    if (text.includes(DAEMON_PREFIX)) {
+      problems.push(`${relative(dir, path)} contains ${DAEMON_PREFIX} — the browser reaches the daemon only through /api`)
     }
   }
 

@@ -164,12 +164,7 @@ export function minutesToClock(minutesAfterMidnight: number): string {
   return clockFromHourMinute(Math.floor(minutesAfterMidnight / 60), minutesAfterMidnight % 60)
 }
 
-/**
- * Formats wall-clock minutes for an `<input type="time">` value. Falls back to
- * midnight on invalid input because the input element requires a well-formed
- * value; pair this with a sibling display using INVALID_ZONE_MARKER to surface
- * the failure.
- */
+/** Formats wall-clock minutes for an `<input type="time">` value. Invalid input yields `'00:00'`, indistinguishable from midnight. */
 export function minutesToInputValue(minutesAfterMidnight: number): string {
   if (isValidMinutes(minutesAfterMidnight) === false) {
     return '00:00'

@@ -26,6 +26,7 @@ export function useStatus(): StatusState {
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)
+  const refreshQueued = useRef(false)
   const mounted = useRef(true)
 
   const poll = useCallback(async () => {
@@ -33,6 +34,8 @@ export function useStatus(): StatusState {
       return
     }
     inFlight.current = true
+    const afterRefresh = refreshQueued.current
+    refreshQueued.current = false
 
     let next = IDLE_POLL_MS
     try {
@@ -43,7 +46,8 @@ export function useStatus(): StatusState {
         setStale(false)
         setPolls((count) => count + 1)
       }
-      next = intervalFor(fresh)
+      // A run or stop request is answered before the daemon acts on it, so the poll a refresh triggers can predate the change.
+      next = afterRefresh ? RUNNING_POLL_MS : intervalFor(fresh)
     } catch (caught: unknown) {
       if (mounted.current) {
         setError(caught instanceof Error ? caught.message : String(caught))
@@ -59,7 +63,7 @@ export function useStatus(): StatusState {
       }
       timer.current = setTimeout(() => {
         void poll()
-      }, next)
+      }, refreshQueued.current ? 0 : next)
     }
   }, [])
 
@@ -77,6 +81,7 @@ export function useStatus(): StatusState {
   }, [poll])
 
   const refresh = useCallback(() => {
+    refreshQueued.current = true
     if (timer.current !== null) {
       clearTimeout(timer.current)
       timer.current = null

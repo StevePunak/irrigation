@@ -12,6 +12,10 @@ Spec: `../docs/design/2026-09-05-irrigation-design.md` §8.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | typecheck, build to `dist/`, then the bundle guard |
 
+`npm run build` writes `dist/`. It is gitignored, it is what the `irrigation-web` Yocto recipe
+installs, and the recipe fails the image build when `dist/index.html` is missing, so build here
+before building an image.
+
 `TZ=UTC` is not optional. `src/test/setup.ts` aborts the suite on any other host
 zone: the timezone tests compare a rendering in `America/Los_Angeles` against the
 host zone, and a host already in that zone passes them whether or not the code

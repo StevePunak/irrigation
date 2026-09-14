@@ -238,7 +238,7 @@ describe('useStatus', () => {
     expect(getStatus).toHaveBeenCalledTimes(2)
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - 1)
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS - 1)
     })
     expect(getStatus).toHaveBeenCalledTimes(2)
   })
