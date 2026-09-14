@@ -24,6 +24,7 @@ private slots:
     void setFiringOutcomeMatchesTheExactKeyOnly();
     void pruneFiredInstantsOlderThanIsExclusiveOfTheCutoff();
     void deleteStartTimeRemovesOnlyThatRow();
+    void startTimesForReportsSuccessInAscendingIdOrder();
     void deleteProgramZonesLeavesOtherProgramsIntact();
     void isMasterEnabledOnlyExactZeroDisables_data();
     void isMasterEnabledOnlyExactZeroDisables();
@@ -353,24 +354,34 @@ void TestRepository::setFiringOutcomeMatchesTheExactKeyOnly()
     program.name = "Morning";
     QVERIFY(source.insertProgram(program));
 
+    Program otherProgram;
+    otherProgram.name = "Evening";
+    QVERIFY(source.insertProgram(otherProgram));
+    QVERIFY(program.id != otherProgram.id);
+
     FiredInstant first;
     first.programId = program.id;
-    // Distinct startTimeId and instant per row: an unqualified UPDATE would touch all three.
+    // programId, startTimeId and the instant are each varied one at a time across the rows
+    // below, so dropping any single WHERE term collides with a neighbour.
     first.startTimeId = 41;
     first.scheduledAtUtc = QDateTime(QDate(2026, 9, 12), QTime(6, 0), QTimeZone::UTC);
     first.outcome = FiredInstant::Outcome::Ran;
     QVERIFY(source.recordFiring(first));
 
-    // Shares program and start time with the target row; only the instant differs, which
-    // pins the WHERE clause's scheduled_at_utc term rather than just program_id/start_time_id.
+    // Shares program and start time with the target row; only the instant differs.
     FiredInstant sameKeyDifferentInstant = first;
     sameKeyDifferentInstant.scheduledAtUtc = QDateTime(QDate(2026, 9, 13), QTime(6, 0), QTimeZone::UTC);
     QVERIFY(source.recordFiring(sameKeyDifferentInstant));
 
-    FiredInstant differentStartTime = first;
-    differentStartTime.startTimeId = 42;
-    differentStartTime.scheduledAtUtc = QDateTime(QDate(2026, 9, 12), QTime(7, 0), QTimeZone::UTC);
-    QVERIFY(source.recordFiring(differentStartTime));
+    // Shares program and instant with the target row; only start_time_id differs.
+    FiredInstant differentStartTimeSameInstant = first;
+    differentStartTimeSameInstant.startTimeId = 42;
+    QVERIFY(source.recordFiring(differentStartTimeSameInstant));
+
+    // Shares start time and instant with the target row; only program_id differs.
+    FiredInstant differentProgramSameKey = first;
+    differentProgramSameKey.programId = otherProgram.id;
+    QVERIFY(source.recordFiring(differentProgramSameKey));
 
     QVERIFY(source.setFiringOutcome(first.programId, first.startTimeId, first.scheduledAtUtc,
                                      FiredInstant::Outcome::SkippedStop));
@@ -392,11 +403,20 @@ void TestRepository::setFiringOutcomeMatchesTheExactKeyOnly()
     QCOMPARE(sameKeyRow.value(0).toString(), QString("ran"));
 
     QSqlQuery differentStartTimeRow = source.rawQuery(
-        QString("SELECT outcome FROM fired_instants WHERE program_id = %1 AND start_time_id = %2")
-            .arg(differentStartTime.programId).arg(differentStartTime.startTimeId), &ok);
+        QString("SELECT outcome FROM fired_instants WHERE program_id = %1 AND start_time_id = %2 AND scheduled_at_utc = '%3'")
+            .arg(differentStartTimeSameInstant.programId).arg(differentStartTimeSameInstant.startTimeId)
+            .arg(differentStartTimeSameInstant.scheduledAtUtc.toUTC().toString(Qt::ISODate)), &ok);
     QVERIFY(ok);
     QVERIFY(differentStartTimeRow.next());
     QCOMPARE(differentStartTimeRow.value(0).toString(), QString("ran"));
+
+    QSqlQuery differentProgramRow = source.rawQuery(
+        QString("SELECT outcome FROM fired_instants WHERE program_id = %1 AND start_time_id = %2 AND scheduled_at_utc = '%3'")
+            .arg(differentProgramSameKey.programId).arg(differentProgramSameKey.startTimeId)
+            .arg(differentProgramSameKey.scheduledAtUtc.toUTC().toString(Qt::ISODate)), &ok);
+    QVERIFY(ok);
+    QVERIFY(differentProgramRow.next());
+    QCOMPARE(differentProgramRow.value(0).toString(), QString("ran"));
 
     // No row matches this instant: zero rows changed.
     QVERIFY(source.setFiringOutcome(first.programId, first.startTimeId,
@@ -463,6 +483,38 @@ void TestRepository::deleteStartTimeRemovesOnlyThatRow()
     QCOMPARE(remaining.first().id, keep.id);
 }
 
+void TestRepository::startTimesForReportsSuccessInAscendingIdOrder()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Two starts";
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime firstInserted;
+    firstInserted.programId = program.id;
+    firstInserted.minutesAfterMidnight = 600;
+    firstInserted.timezone = "America/Denver";
+    QVERIFY(source.insertStartTime(firstInserted));
+
+    ProgramStartTime secondInserted;
+    secondInserted.programId = program.id;
+    secondInserted.minutesAfterMidnight = 300;
+    secondInserted.timezone = "UTC";
+    QVERIFY(source.insertStartTime(secondInserted));
+
+    QVERIFY(firstInserted.id < secondInserted.id);
+
+    bool ok = false;
+    ProgramStartTimeList startTimes = source.startTimesFor(program.id, &ok);
+    QVERIFY(ok);
+    QCOMPARE(startTimes.count(), 2);
+    QCOMPARE(startTimes.at(0).id, firstInserted.id);
+    QCOMPARE(startTimes.at(1).id, secondInserted.id);
+}
+
 void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
 {
     QTemporaryDir dir;
@@ -477,24 +529,53 @@ void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
     survivor.name = "Survivor";
     QVERIFY(source.insertProgram(survivor));
 
-    ProgramZone doomedZone;
-    doomedZone.programId = doomed.id;
-    doomedZone.zoneId = 3;
-    doomedZone.sequence = 1;
-    doomedZone.durationSeconds = 120;
-    QVERIFY(source.insertProgramZone(doomedZone));
+    // Two filler zones on the survivor push doomed's own zone rows past both program ids
+    // (1 and 2), so a WHERE clause that mistakenly compares a zone row's own id to the
+    // bound program id cannot accidentally look correct.
+    ProgramZone fillerZoneA;
+    fillerZoneA.programId = survivor.id;
+    fillerZoneA.zoneId = 1;
+    fillerZoneA.sequence = 90;
+    fillerZoneA.durationSeconds = 30;
+    QVERIFY(source.insertProgramZone(fillerZoneA));
+
+    ProgramZone fillerZoneB;
+    fillerZoneB.programId = survivor.id;
+    fillerZoneB.zoneId = 2;
+    fillerZoneB.sequence = 91;
+    fillerZoneB.durationSeconds = 30;
+    QVERIFY(source.insertProgramZone(fillerZoneB));
+
+    // doomed carries two zones: a single-zone program can be emptied by a mutation that
+    // deletes exactly one row by the wrong column.
+    ProgramZone doomedZoneA;
+    doomedZoneA.programId = doomed.id;
+    doomedZoneA.zoneId = 3;
+    doomedZoneA.sequence = 1;
+    doomedZoneA.durationSeconds = 120;
+    QVERIFY(source.insertProgramZone(doomedZoneA));
+
+    ProgramZone doomedZoneB;
+    doomedZoneB.programId = doomed.id;
+    doomedZoneB.zoneId = 5;
+    doomedZoneB.sequence = 2;
+    doomedZoneB.durationSeconds = 180;
+    QVERIFY(source.insertProgramZone(doomedZoneB));
 
     ProgramZone survivorZone;
     survivorZone.programId = survivor.id;
     survivorZone.zoneId = 4;
-    survivorZone.sequence = 1;
+    survivorZone.sequence = 92;
     survivorZone.durationSeconds = 240;
     QVERIFY(source.insertProgramZone(survivorZone));
+
+    QCOMPARE(source.zonesFor(doomed.id).count(), 2);
+    QCOMPARE(source.zonesFor(survivor.id).count(), 3);
 
     QVERIFY(source.deleteProgramZones(doomed.id));
 
     QCOMPARE(source.zonesFor(doomed.id).count(), 0);
-    QCOMPARE(source.zonesFor(survivor.id).count(), 1);
+    QCOMPARE(source.zonesFor(survivor.id).count(), 3);
 }
 
 void TestRepository::isMasterEnabledOnlyExactZeroDisables_data()
@@ -530,6 +611,7 @@ void TestRepository::isMasterEnabledDefaultsToEnabledWhenAbsent()
     bool ok = false;
     source.rawQuery("DELETE FROM settings WHERE key = 'master_enabled'", &ok);
     QVERIFY(ok);
+    QVERIFY(source.settingValue("master_enabled").isEmpty());
 
     QVERIFY(source.isMasterEnabled());
 }

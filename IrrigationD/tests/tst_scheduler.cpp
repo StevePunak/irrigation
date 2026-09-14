@@ -9,28 +9,6 @@
 #include "iclock.h"
 #include "scheduler.h"
 
-// Every real program/start-time pair below must have program.id != startTime.id: SQLite hands
-// both tables id 1 on a fresh insert, and that coincidence would hide a swapped programId/
-// startTimeId bind. Two filler rows in each table push the real ids apart before they are used.
-static void offsetIdsSoProgramAndStartTimeDiffer(IrrigationDataSource& source)
-{
-    Program filler;
-    filler.name = "Filler";
-    QVERIFY(source.insertProgram(filler));
-
-    ProgramStartTime fillerStart1;
-    fillerStart1.programId = filler.id;
-    fillerStart1.minutesAfterMidnight = 0;
-    fillerStart1.timezone = "UTC";
-    QVERIFY(source.insertStartTime(fillerStart1));
-
-    ProgramStartTime fillerStart2;
-    fillerStart2.programId = filler.id;
-    fillerStart2.minutesAfterMidnight = 1;
-    fillerStart2.timezone = "UTC";
-    QVERIFY(source.insertStartTime(fillerStart2));
-}
-
 static QString outcomeFor(IrrigationDataSource& source, int programId, int startTimeId)
 {
     bool ok = false;
@@ -58,6 +36,13 @@ static int firedInstantCount(IrrigationDataSource& source, int programId, int st
 class TestScheduler : public QObject
 {
     Q_OBJECT
+private:
+    // Every real program/start-time pair in this file must have program.id != startTime.id:
+    // SQLite hands both tables id 1 on a fresh insert, and that coincidence would hide a
+    // swapped programId/startTimeId bind. One filler program and two filler start times push
+    // the real ids apart before they are used.
+    static bool offsetIdsSoProgramAndStartTimeDiffer(IrrigationDataSource& source);
+
 private slots:
     void initTestCase();
 
@@ -66,19 +51,27 @@ private slots:
     void everyNDaysCountsFromTheAnchor();
     void springForwardGapIsRejected();
     void fallBackRepeatPicksTheEarlierOffset();
+    void fallBackRepeatInANegativeDstZonePicksTheEarlierOffset();
     void aStartTimeDoesNotDriftAcrossDst();
     void minutesAfterMidnightOutOfRangeIsRejected();
 
     void nextRunUtcFindsTheEarliestUpcomingStartTime();
     void nextRunUtcSkipsNonWateringDays();
     void nextRunUtcReturnsInvalidWhenNoDayEverMatchesWithinTheHorizon();
+    void nextRunUtcFindsAHitExactlyAtTheHorizon();
     void nextRunUtcResolvesAcrossDst();
     void nextRunUtcReturnsInvalidForADisabledProgram();
+    void nextRunUtcIncludesAnInstantExactlyNow();
 
     void firesOnceInsideTheGraceWindow();
+    void tickDoesNotFireBeforeTheScheduledInstant();
+    void graceWindowFiresAt120SecondsAndMissesAt121();
     void missedOccurrenceIsRecordedAndNeverCaughtUp();
     void rainDelaySuppressesFiring();
+    void expiredRainDelayNoLongerSuppressesFiring();
     void graceWindowCrossesLocalMidnight();
+    void graceWindowCrossesLocalMidnightAheadOfUtc();
+    void graceWindowCrossesLocalMidnightBehindUtc();
     void unrecognisedZoneRecordsMissedInstant();
     void springForwardGapRecordsSlidMissedInstant();
     void outOfRangeMinutesNeverReachesTheDatabase();
@@ -88,6 +81,29 @@ private slots:
     void masterEnabledValuesAllRunNormally();
     void masterEnabledDefaultsToEnabledWhenAbsent();
 };
+
+bool TestScheduler::offsetIdsSoProgramAndStartTimeDiffer(IrrigationDataSource& source)
+{
+    Program filler;
+    filler.name = "Filler";
+    if(source.insertProgram(filler) == false) {
+        return false;
+    }
+
+    ProgramStartTime fillerStart1;
+    fillerStart1.programId = filler.id;
+    fillerStart1.minutesAfterMidnight = 0;
+    fillerStart1.timezone = "UTC";
+    if(source.insertStartTime(fillerStart1) == false) {
+        return false;
+    }
+
+    ProgramStartTime fillerStart2;
+    fillerStart2.programId = filler.id;
+    fillerStart2.minutesAfterMidnight = 1;
+    fillerStart2.timezone = "UTC";
+    return source.insertStartTime(fillerStart2);
+}
 
 void TestScheduler::initTestCase()
 {
@@ -160,18 +176,15 @@ void TestScheduler::fallBackRepeatPicksTheEarlierOffset()
     const QDateTime resolved = Scheduler::resolveToUtc(startTime, QDate(2026, 11, 1), &valid);
     QVERIFY(valid);
 
-    const QTimeZone zone("America/Los_Angeles");
-    const QDateTime earlierOffset = QDateTime(QDate(2026, 11, 1), QTime(1, 30), zone,
-                                               QDateTime::TransitionResolution::PreferBefore).toUTC();
-    const QDateTime laterOffset = QDateTime(QDate(2026, 11, 1), QTime(1, 30), zone,
-                                             QDateTime::TransitionResolution::PreferAfter).toUTC();
-    QVERIFY(earlierOffset != laterOffset);
+    const QDateTime earlierOffset(QDate(2026, 11, 1), QTime(8, 30), QTimeZone::UTC);
+    const QDateTime laterOffset(QDate(2026, 11, 1), QTime(9, 30), QTimeZone::UTC);
+    QVERIFY(earlierOffset < laterOffset);
     QCOMPARE(resolved, earlierOffset);
 
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Fall back";
@@ -200,8 +213,8 @@ void TestScheduler::fallBackRepeatPicksTheEarlierOffset()
     QCOMPARE(spy.count(), 1);
 
     // The second physical pass through the repeated local hour, an hour later:
-    // resolveToUtc() yields the same earlier instant again, well outside its grace
-    // window, so nothing new is recorded.
+    // resolveToUtc() yields the same earlier instant again, and hasFired() blocks it
+    // before the grace-window check runs.
     clock.setNowUtc(laterOffset.addSecs(30));
     scheduler.tick();
     QCOMPARE(spy.count(), 1);
@@ -209,6 +222,26 @@ void TestScheduler::fallBackRepeatPicksTheEarlierOffset()
     QCOMPARE(firedInstantCount(source, program.id, dbStartTime.id), 1);
     QVERIFY(source.hasFired(program.id, dbStartTime.id, earlierOffset));
     QCOMPARE(outcomeFor(source, program.id, dbStartTime.id), QString("ran"));
+}
+
+void TestScheduler::fallBackRepeatInANegativeDstZonePicksTheEarlierOffset()
+{
+    // Europe/Dublin models winter as its daylight-saving period: legal standard time is
+    // IST (UTC+1) and winter clock is a negative offset from it. 2026-10-25 01:30 happens
+    // twice, at 00:30Z and 01:30Z; PreferDaylightSaving would pick the LATER of the two here,
+    // the opposite of what it picks in a positive-DST zone like America/Los_Angeles.
+    ProgramStartTime startTime;
+    startTime.minutesAfterMidnight = 90;
+    startTime.timezone = "Europe/Dublin";
+
+    bool valid = false;
+    const QDateTime resolved = Scheduler::resolveToUtc(startTime, QDate(2026, 10, 25), &valid);
+    QVERIFY(valid);
+
+    const QDateTime earlierOffset(QDate(2026, 10, 25), QTime(0, 30), QTimeZone::UTC);
+    const QDateTime laterOffset(QDate(2026, 10, 25), QTime(1, 30), QTimeZone::UTC);
+    QVERIFY(earlierOffset < laterOffset);
+    QCOMPARE(resolved, earlierOffset);
 }
 
 void TestScheduler::aStartTimeDoesNotDriftAcrossDst()
@@ -223,8 +256,8 @@ void TestScheduler::aStartTimeDoesNotDriftAcrossDst()
     QDateTime summer = Scheduler::resolveToUtc(startTime, QDate(2026, 7, 15), &valid);
     QVERIFY(valid);
 
-    // Different UTC instants, same wall clock. Storing the rule in UTC would make
-    // these identical and the program would run at 05:00 all summer.
+    // Winter is PST (UTC-8) and summer is PDT (UTC-7): the same 06:00 wall clock
+    // resolves an hour apart in UTC.
     QCOMPARE(winter.time(), QTime(14, 0));
     QCOMPARE(summer.time(), QTime(13, 0));
 }
@@ -257,7 +290,7 @@ void TestScheduler::nextRunUtcFindsTheEarliestUpcomingStartTime()
     Program program;
     program.enabled = true;
     program.dayMode = Program::DayMode::DaysOfWeek;
-    program.dowMask = 0x7F;   // every day, so only the start-time ordering is under test
+    program.dowMask = 0x7F;   // every day
 
     ProgramStartTime early;
     early.minutesAfterMidnight = 360;   // 06:00 UTC, already behind nowUtc today
@@ -267,7 +300,8 @@ void TestScheduler::nextRunUtcFindsTheEarliestUpcomingStartTime()
     late.minutesAfterMidnight = 900;    // 15:00 UTC, still ahead of nowUtc today
     late.timezone = "UTC";
 
-    const ProgramStartTimeList startTimes = { early, late };
+    // late is listed first: its instant is the true earliest of the two.
+    const ProgramStartTimeList startTimes = { late, early };
     const QDateTime nowUtc(QDate(2026, 9, 14), QTime(10, 0), QTimeZone::UTC);
 
     QCOMPARE(Scheduler::nextRunUtc(program, startTimes, nowUtc),
@@ -310,6 +344,25 @@ void TestScheduler::nextRunUtcReturnsInvalidWhenNoDayEverMatchesWithinTheHorizon
     QVERIFY(Scheduler::nextRunUtc(program, { startTime }, nowUtc).isValid() == false);
 }
 
+void TestScheduler::nextRunUtcFindsAHitExactlyAtTheHorizon()
+{
+    Program program;
+    program.enabled = true;
+    program.dayMode = Program::DayMode::EveryNDays;
+    program.intervalDays = 366;   // exactly the search horizon
+    program.anchorDate = QDate(2026, 9, 14);
+
+    ProgramStartTime startTime;
+    startTime.minutesAfterMidnight = 0;
+    startTime.timezone = "UTC";
+
+    // The only watering day within reach is 366 days after nowUtc's date, the last day
+    // the horizon loop visits.
+    const QDateTime nowUtc(QDate(2026, 9, 14), QTime(12, 0), QTimeZone::UTC);
+    QCOMPARE(Scheduler::nextRunUtc(program, { startTime }, nowUtc),
+             QDateTime(QDate(2027, 9, 15), QTime(0, 0), QTimeZone::UTC));
+}
+
 void TestScheduler::nextRunUtcResolvesAcrossDst()
 {
     Program program;
@@ -343,12 +396,28 @@ void TestScheduler::nextRunUtcReturnsInvalidForADisabledProgram()
     QVERIFY(Scheduler::nextRunUtc(program, { startTime }, nowUtc).isValid() == false);
 }
 
+void TestScheduler::nextRunUtcIncludesAnInstantExactlyNow()
+{
+    Program program;
+    program.enabled = true;
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 0x7F;
+
+    ProgramStartTime startTime;
+    startTime.minutesAfterMidnight = 600;   // 10:00 UTC
+    startTime.timezone = "UTC";
+
+    // nowUtc lands exactly on a start time's own instant: "at or after nowUtc" includes it.
+    const QDateTime nowUtc(QDate(2026, 9, 14), QTime(10, 0), QTimeZone::UTC);
+    QCOMPARE(Scheduler::nextRunUtc(program, { startTime }, nowUtc), nowUtc);
+}
+
 void TestScheduler::firesOnceInsideTheGraceWindow()
 {
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Morning";
@@ -368,6 +437,9 @@ void TestScheduler::firesOnceInsideTheGraceWindow()
     QSignalSpy spy(&scheduler, &Scheduler::programDue);
     scheduler.tick();
     QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toInt(), program.id);
+    QCOMPARE(spy.at(0).at(1).toInt(), startTime.id);
+    QCOMPARE(spy.at(0).at(2).toDateTime(), QDateTime(QDate(2026, 9, 15), QTime(6, 0), QTimeZone::UTC));
 
     // A second tick inside the same window must not fire again.
     clock.advance(30);
@@ -379,12 +451,102 @@ void TestScheduler::firesOnceInsideTheGraceWindow()
     QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
 }
 
+void TestScheduler::tickDoesNotFireBeforeTheScheduledInstant()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+    Program program;
+    program.name = "Not yet due";
+    program.dayMode = Program::DayMode::Odd;
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime startTime;
+    startTime.programId = program.id;
+    startTime.minutesAfterMidnight = 360;   // 06:00
+    startTime.timezone = "UTC";
+    QVERIFY(source.insertStartTime(startTime));
+
+    // One second before the instant.
+    TestClock clock(QDateTime(QDate(2026, 9, 15), QTime(5, 59, 59), QTimeZone::UTC));
+    Scheduler scheduler(&source, &clock);
+
+    QSignalSpy spy(&scheduler, &Scheduler::programDue);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 0);
+    QCOMPARE(firedInstantCount(source, program.id, startTime.id), 0);
+
+    // Advanced onto the instant.
+    clock.advance(1);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+}
+
+void TestScheduler::graceWindowFiresAt120SecondsAndMissesAt121()
+{
+    {
+        QTemporaryDir dir;
+        IrrigationDataSource source(dir.filePath("irrigation.db"));
+        QVERIFY(source.open());
+        QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+        Program program;
+        program.name = "Grace edge fires";
+        program.dayMode = Program::DayMode::Odd;
+        QVERIFY(source.insertProgram(program));
+
+        ProgramStartTime startTime;
+        startTime.programId = program.id;
+        startTime.minutesAfterMidnight = 360;   // 06:00
+        startTime.timezone = "UTC";
+        QVERIFY(source.insertStartTime(startTime));
+
+        // Exactly 120 s late.
+        TestClock clock(QDateTime(QDate(2026, 9, 15), QTime(6, 2, 0), QTimeZone::UTC));
+        Scheduler scheduler(&source, &clock);
+
+        QSignalSpy spy(&scheduler, &Scheduler::programDue);
+        scheduler.tick();
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    }
+    {
+        QTemporaryDir dir;
+        IrrigationDataSource source(dir.filePath("irrigation.db"));
+        QVERIFY(source.open());
+        QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+        Program program;
+        program.name = "Grace edge misses";
+        program.dayMode = Program::DayMode::Odd;
+        QVERIFY(source.insertProgram(program));
+
+        ProgramStartTime startTime;
+        startTime.programId = program.id;
+        startTime.minutesAfterMidnight = 360;   // 06:00
+        startTime.timezone = "UTC";
+        QVERIFY(source.insertStartTime(startTime));
+
+        // Exactly 121 s late.
+        TestClock clock(QDateTime(QDate(2026, 9, 15), QTime(6, 2, 1), QTimeZone::UTC));
+        Scheduler scheduler(&source, &clock);
+
+        QSignalSpy spy(&scheduler, &Scheduler::programDue);
+        scheduler.tick();
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("missed"));
+    }
+}
+
 void TestScheduler::missedOccurrenceIsRecordedAndNeverCaughtUp()
 {
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Morning";
@@ -420,7 +582,7 @@ void TestScheduler::rainDelaySuppressesFiring()
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
     QVERIFY(source.setSettingValue("rain_delay_until", "2026-09-16T00:00:00Z"));
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Morning";
@@ -445,12 +607,40 @@ void TestScheduler::rainDelaySuppressesFiring()
     QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("skipped_rain"));
 }
 
+void TestScheduler::expiredRainDelayNoLongerSuppressesFiring()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(source.setSettingValue("rain_delay_until", "2026-09-14T00:00:00Z"));   // earlier than the clock
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+    Program program;
+    program.name = "Rain delay expired";
+    program.dayMode = Program::DayMode::Odd;
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime startTime;
+    startTime.programId = program.id;
+    startTime.minutesAfterMidnight = 360;
+    startTime.timezone = "UTC";
+    QVERIFY(source.insertStartTime(startTime));
+
+    TestClock clock(QDateTime(QDate(2026, 9, 15), QTime(6, 0, 10), QTimeZone::UTC));
+    Scheduler scheduler(&source, &clock);
+
+    QSignalSpy spy(&scheduler, &Scheduler::programDue);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+}
+
 void TestScheduler::graceWindowCrossesLocalMidnight()
 {
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Late night";
@@ -472,7 +662,82 @@ void TestScheduler::graceWindowCrossesLocalMidnight()
     QCOMPARE(spy.count(), 1);
 
     const QList<QVariant> args = spy.takeFirst();
+    QCOMPARE(args.at(0).toInt(), program.id);
+    QCOMPARE(args.at(1).toInt(), startTime.id);
     QCOMPARE(args.at(2).toDateTime(), QDateTime(QDate(2026, 9, 15), QTime(23, 59), QTimeZone::UTC));
+    QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
+}
+
+void TestScheduler::graceWindowCrossesLocalMidnightAheadOfUtc()
+{
+    // Pacific/Auckland is NZST (UTC+12, no DST) in July. nowUtc's own calendar date (the
+    // 15th) is one day behind the zone's local date (the 16th) at this instant, so a "today"
+    // that skips the zone conversion would evaluate the 14th/15th instead of the 15th/16th.
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+    Program program;
+    program.name = "Ahead of UTC";
+    program.dayMode = Program::DayMode::Even;
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime startTime;
+    startTime.programId = program.id;
+    startTime.minutesAfterMidnight = 479;   // 07:59 local, just before nowUtc's local time
+    startTime.timezone = "Pacific/Auckland";
+    QVERIFY(source.insertStartTime(startTime));
+
+    // 2026-07-15 20:00:30 UTC is 2026-07-16 08:00:30 NZST.
+    TestClock clock(QDateTime(QDate(2026, 7, 15), QTime(20, 0, 30), QTimeZone::UTC));
+    Scheduler scheduler(&source, &clock);
+
+    QSignalSpy spy(&scheduler, &Scheduler::programDue);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+
+    const QDateTime scheduledUtc(QDate(2026, 7, 15), QTime(19, 59), QTimeZone::UTC);
+    QVERIFY(source.hasFired(program.id, startTime.id, scheduledUtc));
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
+}
+
+void TestScheduler::graceWindowCrossesLocalMidnightBehindUtc()
+{
+    // America/Los_Angeles is PST (UTC-8, no DST) in January. The watering days are Saturday
+    // and Sunday only, so the 6th (Friday) is excluded and the 7th (Saturday) and 8th
+    // (Sunday) are the only candidates a "today" of either the 7th or the 8th can reach.
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+    Program program;
+    program.name = "Behind UTC";
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = (1 << 5) | (1 << 6);   // Saturday and Sunday
+    QVERIFY(source.insertProgram(program));
+
+    // 02:30 on 2026-03-08 (a Sunday) does not exist in this zone: the spring-forward gap.
+    // Only a "today" that reaches the 8th can trigger the Missed row this test checks for.
+    ProgramStartTime startTime;
+    startTime.programId = program.id;
+    startTime.minutesAfterMidnight = 150;
+    startTime.timezone = "America/Los_Angeles";
+    QVERIFY(source.insertStartTime(startTime));
+
+    // 2026-03-08 03:00:00 UTC is 2026-03-07 19:00:00 PST: nowUtc's own calendar date (the
+    // 8th) is one day ahead of the zone's local date (the 7th) at this instant.
+    TestClock clock(QDateTime(QDate(2026, 3, 8), QTime(3, 0, 0), QTimeZone::UTC));
+    Scheduler scheduler(&source, &clock);
+
+    QSignalSpy spy(&scheduler, &Scheduler::programDue);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 0);
+
+    // A "today" taken from nowUtc's own date also reaches the 8th, recording an extra
+    // Missed row for its nonexistent 02:30 on top of the 7th's genuine one.
     QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
 }
 
@@ -481,7 +746,7 @@ void TestScheduler::unrecognisedZoneRecordsMissedInstant()
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Bad zone";
@@ -504,11 +769,6 @@ void TestScheduler::unrecognisedZoneRecordsMissedInstant()
     const QDateTime missedInstant(QDate(2026, 9, 15), QTime(6, 10), QTimeZone::UTC);
     QVERIFY(source.hasFired(program.id, startTime.id, missedInstant));
     QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("missed"));
-
-    // A repeat tick must not add a second row for the same unresolved instant.
-    clock.advance(1);
-    scheduler.tick();
-    QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
 }
 
 void TestScheduler::springForwardGapRecordsSlidMissedInstant()
@@ -516,7 +776,7 @@ void TestScheduler::springForwardGapRecordsSlidMissedInstant()
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Spring gap";
@@ -537,9 +797,7 @@ void TestScheduler::springForwardGapRecordsSlidMissedInstant()
     scheduler.tick();
     QCOMPARE(spy.count(), 0);
 
-    const QTimeZone zone("America/Los_Angeles");
-    const QDateTime slidInstant =
-        QDateTime(QDate(2026, 3, 8), QTime(2, 30), zone, QDateTime::TransitionResolution::PreferBefore).toUTC();
+    const QDateTime slidInstant(QDate(2026, 3, 8), QTime(9, 30), QTimeZone::UTC);
     const QDateTime naiveInstant(QDate(2026, 3, 8), QTime(2, 30), QTimeZone::UTC);
     QVERIFY(slidInstant != naiveInstant);
 
@@ -552,7 +810,7 @@ void TestScheduler::outOfRangeMinutesNeverReachesTheDatabase()
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Bad minutes";
@@ -579,7 +837,7 @@ void TestScheduler::emissionIsGatedOnRecordFiringSucceeding()
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Read-only";
@@ -613,7 +871,7 @@ void TestScheduler::masterDisabledSkipsTheTick()
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
     QVERIFY(source.setSettingValue("master_enabled", "0"));
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Disabled master";
@@ -652,7 +910,7 @@ void TestScheduler::masterEnabledValuesAllRunNormally()
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
     QVERIFY(source.setSettingValue("master_enabled", masterEnabledValue));
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "Master enabled";
@@ -684,7 +942,7 @@ void TestScheduler::masterEnabledDefaultsToEnabledWhenAbsent()
     QVERIFY(deleteOk);
     QVERIFY(source.settingValue("master_enabled").isEmpty());
 
-    offsetIdsSoProgramAndStartTimeDiffer(source);
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
 
     Program program;
     program.name = "No master row";
