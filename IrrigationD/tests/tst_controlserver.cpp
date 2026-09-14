@@ -139,6 +139,8 @@ private slots:
     void zoneRunUnknownZoneReturns404AndEmitsNothing();
     void zoneRunMalformedBodyReturns400AndEmitsNothing();
     void zoneRunSecondsBoundaryAcceptsOneRejectsZero();
+    void zoneRunRejectsAMissingOrNonNumericSeconds_data();
+    void zoneRunRejectsAMissingOrNonNumericSeconds();
     void zoneRunDisabledZoneReturns409AndEmitsNothing();
 
     void stopEmitsStopRequestedExactlyOnce();
@@ -147,6 +149,7 @@ private slots:
     void settingsPutRejectsInvalidValue_data();
     void settingsPutRejectsInvalidValue();
     void settingsPutRejectsAMultiKeyBodyWhenAnyKeyIsInvalid();
+    void settingsPutRejectsAMultiKeyBodyWhenALaterKeyIsNull();
     void settingsPutRejectsNonStringValue_data();
     void settingsPutRejectsNonStringValue();
     void settingsPutMalformedBodyReturns400_data();
@@ -358,10 +361,8 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
     QCOMPARE(firstBody.value("masterEnabled").toBool(), true);
     QCOMPARE(firstBody.value("stopHeld").toBool(), false);
 
-    // masterEnabled and stopHeld both true, so a formula deriving one bool from the other
-    // (or a hardcoded stopHeld) cannot satisfy this snapshot and the one above together.
-    // nextRunUtc is fed in a non-UTC zone so a serializer that skips the UTC conversion
-    // emits a different instant than the one asserted here.
+    // masterEnabled and stopHeld must both stay true here; nextRunUtc must stay in a
+    // non-UTC zone.
     ServerStatus second;
     second.runningZone = 7;
     second.secondsRemaining = 42;
@@ -610,6 +611,37 @@ void TestControlServer::zoneRunSecondsBoundaryAcceptsOneRejectsZero()
     server.stop(TimeSpan::fromSeconds(5));
 }
 
+void TestControlServer::zoneRunRejectsAMissingOrNonNumericSeconds_data()
+{
+    QTest::addColumn<QByteArray>("body");
+
+    QTest::newRow("seconds absent") << QByteArray(R"({})");
+    QTest::newRow("seconds as a JSON string") << QByteArray(R"({"seconds": "77"})");
+}
+
+void TestControlServer::zoneRunRejectsAMissingOrNonNumericSeconds()
+{
+    QFETCH(QByteArray, body);
+
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+    seedRenumberedZone(dbPath, 99, true);
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QSignalSpy spy(&server, &IrrigationControlServer::manualZoneRunRequested);
+    QNetworkAccessManager manager;
+
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/99/run", body);
+    QCOMPARE(statusCode(reply), 400);
+
+    spy.wait(200);
+    QCOMPARE(spy.count(), 0);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
 void TestControlServer::zoneRunDisabledZoneReturns409AndEmitsNothing()
 {
     QTemporaryDir dir;
@@ -747,19 +779,32 @@ void TestControlServer::settingsPutRejectsAMultiKeyBodyWhenAnyKeyIsInvalid()
     QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
     QNetworkAccessManager manager;
 
-    // log_level (valid on its own) precedes master_enabled (invalid) in the wire body.
+    // QJsonObject iterates its keys in sorted order: "log_level" (valid on its own)
+    // sorts before "master_enabled" (invalid).
     QNetworkReply* firstReply = putJson(manager, server.boundPort(), "/admin/settings",
                                         R"({"log_level": "debug", "master_enabled": "true"})");
     QCOMPARE(statusCode(firstReply), 400);
 
-    // master_enabled (valid on its own, and a value that differs from the default)
-    // precedes an unknown key.
+    // "master_enabled" (valid on its own, and a value that differs from the default)
+    // sorts before the unknown key.
     QNetworkReply* secondReply = putJson(manager, server.boundPort(), "/admin/settings",
                                          R"({"master_enabled": "0", "zzz_unknown_key": "1"})");
     QCOMPARE(statusCode(secondReply), 400);
 
+    // "rain_delay_until" (valid on its own) is first in SettingsKeys' own declared order,
+    // ahead of "log_level" (invalid), though it sorts after "log_level" alphabetically.
+    QNetworkReply* thirdReply = putJson(manager, server.boundPort(), "/admin/settings",
+                                        R"({"rain_delay_until": "2026-10-05T08:00:00Z", "log_level": "Verbose"})");
+    QCOMPARE(statusCode(thirdReply), 400);
+
     spy.wait(200);
     QCOMPARE(spy.count(), 0);
+
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/settings");
+    const QJsonObject body = QJsonDocument::fromJson(getReply->readAll()).object();
+    QCOMPARE(body.value("log_level").toString(), QString("info"));
+    QCOMPARE(body.value("master_enabled").toString(), QString("1"));
+    QCOMPARE(body.value("rain_delay_until").toString(), QString(""));
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
 
@@ -767,6 +812,40 @@ void TestControlServer::settingsPutRejectsAMultiKeyBodyWhenAnyKeyIsInvalid()
     QVERIFY(verify.open());
     QCOMPARE(verify.settingValue("log_level"), QString("info"));
     QCOMPARE(verify.settingValue("master_enabled"), QString("1"));
+    QCOMPARE(verify.settingValue("rain_delay_until"), QString(""));
+}
+
+void TestControlServer::settingsPutRejectsAMultiKeyBodyWhenALaterKeyIsNull()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
+    QNetworkAccessManager manager;
+
+    // "log_level" (valid) sorts before "rain_delay_until" (a JSON null); a handler that
+    // writes a key as soon as it validates would store "log_level" before ever reaching
+    // the null, whatever status code the null value ends up answering with.
+    QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/settings",
+                                   R"({"log_level": "debug", "rain_delay_until": null})");
+    QCOMPARE(statusCode(reply), 400);
+
+    spy.wait(200);
+    QCOMPARE(spy.count(), 0);
+
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/settings");
+    const QJsonObject body = QJsonDocument::fromJson(getReply->readAll()).object();
+    QCOMPARE(body.value("log_level").toString(), QString("info"));
+    QCOMPARE(body.value("rain_delay_until").toString(), QString(""));
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    QCOMPARE(verify.settingValue("log_level"), QString("info"));
+    QCOMPARE(verify.settingValue("rain_delay_until"), QString(""));
 }
 
 void TestControlServer::settingsPutRejectsNonStringValue_data()
@@ -777,6 +856,8 @@ void TestControlServer::settingsPutRejectsNonStringValue_data()
 
     QTest::newRow("rain_delay_until as a JSON null")
         << QByteArray(R"({"rain_delay_until": null})") << QString("rain_delay_until") << QString("");
+    QTest::newRow("rain_delay_until as a JSON number")
+        << QByteArray(R"({"rain_delay_until": 12345})") << QString("rain_delay_until") << QString("");
     QTest::newRow("max_zone_seconds as a JSON number")
         << QByteArray(R"({"max_zone_seconds": 1800})") << QString("max_zone_seconds") << QString("3600");
     QTest::newRow("master_enabled as a JSON boolean")
@@ -892,7 +973,7 @@ void TestControlServer::settingsPutSuccessReadBackThroughGetAndSeparateDataSourc
     connect(&server, &IrrigationControlServer::settingsChanged, &server, [&maxZoneSecondsAtEmit, dbPath]()
     {
         IrrigationDataSource reader(dbPath);
-        if(reader.open()) {
+        if(reader.open() == true) {
             maxZoneSecondsAtEmit = reader.settingValue("max_zone_seconds");
         }
     }, Qt::DirectConnection);
