@@ -7,6 +7,8 @@
 
 #include <Kanoop/loggingtypes.h>
 
+#include <algorithm>
+
 #include <QCoreApplication>
 #include <QHostAddress>
 #include <QHttpServerResponder>
@@ -379,6 +381,45 @@ void IrrigationControlServer::rollbackTransaction()
     }
 }
 
+bool IrrigationControlServer::reconcileStartTimes(int programId, ProgramStartTimeList& startTimes)
+{
+    bool ok = false;
+    const ProgramStartTimeList stored = _source->startTimesFor(programId, &ok);
+
+    QList<bool> matched(stored.count(), false);
+    for(ProgramStartTime& startTime : startTimes) {
+        startTime.programId = programId;
+        startTime.id = 0;
+        for(int i = 0; i < stored.count(); i++) {
+            const ProgramStartTime& candidate = stored.at(i);
+            if(matched.at(i) == false
+               && candidate.minutesAfterMidnight == startTime.minutesAfterMidnight
+               && candidate.timezone == startTime.timezone) {
+                matched[i] = true;
+                startTime.id = candidate.id;
+                break;
+            }
+        }
+    }
+
+    for(int i = 0; ok == true && i < stored.count(); i++) {
+        if(matched.at(i) == false) {
+            ok = _source->deleteStartTime(stored.at(i).id);
+        }
+    }
+
+    for(ProgramStartTime& startTime : startTimes) {
+        if(ok == false) {
+            break;
+        }
+        if(startTime.id == 0) {
+            ok = _source->insertStartTime(startTime);
+        }
+    }
+
+    return ok;
+}
+
 QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServerRequest& request)
 {
     QJsonParseError error;
@@ -483,19 +524,11 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
     bool ok = _source->updateProgram(program);
 
     if(ok) {
-        _source->rawQuery(QString("DELETE FROM program_start_times WHERE program_id = %1").arg(programId), &ok);
+        ok = reconcileStartTimes(programId, startTimes);
     }
 
     if(ok) {
-        _source->rawQuery(QString("DELETE FROM program_zones WHERE program_id = %1").arg(programId), &ok);
-    }
-
-    for(ProgramStartTime& startTime : startTimes) {
-        if(ok == false) {
-            break;
-        }
-        startTime.programId = programId;
-        ok = _source->insertStartTime(startTime);
+        ok = _source->deleteProgramZones(programId);
     }
 
     for(ProgramZone& zone : zones) {
@@ -511,6 +544,11 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
         return QHttpServerResponse(QJsonObject{{"error", "failed to update program"}},
                                    QHttpServerResponder::StatusCode::InternalServerError);
     }
+
+    std::sort(startTimes.begin(), startTimes.end(), [](const ProgramStartTime& a, const ProgramStartTime& b)
+    {
+        return a.id < b.id;
+    });
 
     const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, QDateTime::currentDateTimeUtc());
     return QHttpServerResponse(ProgramJson::toJson(program, startTimes, zones, nextRunUtc),

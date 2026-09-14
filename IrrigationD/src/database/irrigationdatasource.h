@@ -61,17 +61,26 @@ public:
     /** @brief Deletes a program by id, cascading to its start times and zones. @return True on success. */
     bool deleteProgram(int programId);
 
-    /** @brief Returns the start times belonging to @p programId. */
-    ProgramStartTimeList startTimesFor(int programId);
+    /**
+     * @brief Returns the start times belonging to @p programId, ordered by id.
+     * @param ok When non-null, set to false when the query failed, in which case the list is empty.
+     */
+    ProgramStartTimeList startTimesFor(int programId, bool* ok = nullptr);
 
     /** @brief Inserts @p startTime and writes the generated id back into it. @return True on success. */
     bool insertStartTime(ProgramStartTime& startTime);
+
+    /** @brief Deletes the start time @p startTimeId. @return True on success. */
+    bool deleteStartTime(int startTimeId);
 
     /** @brief Returns the zones belonging to @p programId, ordered by sequence. */
     ProgramZoneList zonesFor(int programId);
 
     /** @brief Inserts @p programZone and writes the generated id back into it. @return True on success. */
     bool insertProgramZone(ProgramZone& programZone);
+
+    /** @brief Deletes every zone entry belonging to @p programId. @return True on success. */
+    bool deleteProgramZones(int programId);
 
     /** @brief Records that a start time fired. A repeat of the same instant is a no-op. @return True on success. */
     bool recordFiring(const FiredInstant& instant);

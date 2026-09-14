@@ -132,6 +132,19 @@ private:
     bool commitTransaction();
     void rollbackTransaction();
 
+    /**
+     * @brief Replaces the start times stored for @p programId with @p startTimes, reusing stored rows by value.
+     *
+     * Each incoming entry takes the id of one not-yet-matched stored row with the same
+     * minutesAfterMidnight and timezone. Unmatched stored rows are deleted and unmatched
+     * entries inserted; every id is written back into @p startTimes. Call inside a transaction.
+     *
+     * @warning fired_instants is keyed on start_time_id. A start time deleted and
+     *          re-inserted gets a new id and fires again inside the grace window.
+     * @return False when a read or write failed.
+     */
+    bool reconcileStartTimes(int programId, ProgramStartTimeList& startTimes);
+
     static const QStringList SettingsKeys;
 
     QString _databasePath;

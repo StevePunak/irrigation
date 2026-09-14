@@ -305,9 +305,12 @@ bool IrrigationDataSource::deleteProgram(int programId)
     return executeQuery(query);
 }
 
-ProgramStartTimeList IrrigationDataSource::startTimesFor(int programId)
+ProgramStartTimeList IrrigationDataSource::startTimesFor(int programId, bool* ok)
 {
     ProgramStartTimeList result;
+    if(ok != nullptr) {
+        *ok = false;
+    }
 
     bool success = false;
     QSqlQuery query = prepareQuery(
@@ -330,6 +333,9 @@ ProgramStartTimeList IrrigationDataSource::startTimesFor(int programId)
         startTime.minutesAfterMidnight = query.value("minutes_after_midnight").toInt();
         startTime.timezone = query.value("timezone").toString();
         result.append(startTime);
+    }
+    if(ok != nullptr) {
+        *ok = true;
     }
     return result;
 }
@@ -354,6 +360,18 @@ bool IrrigationDataSource::insertStartTime(ProgramStartTime& startTime)
         startTime.id = query.lastInsertId().toInt();
     }
     return success;
+}
+
+bool IrrigationDataSource::deleteStartTime(int startTimeId)
+{
+    bool success = false;
+    QSqlQuery query = prepareQuery("DELETE FROM program_start_times WHERE id = :id", &success);
+    if(success == false) {
+        return false;
+    }
+
+    query.bindValue(":id", startTimeId);
+    return executeQuery(query);
 }
 
 ProgramZoneList IrrigationDataSource::zonesFor(int programId)
@@ -407,6 +425,18 @@ bool IrrigationDataSource::insertProgramZone(ProgramZone& programZone)
         programZone.id = query.lastInsertId().toInt();
     }
     return success;
+}
+
+bool IrrigationDataSource::deleteProgramZones(int programId)
+{
+    bool success = false;
+    QSqlQuery query = prepareQuery("DELETE FROM program_zones WHERE program_id = :programId", &success);
+    if(success == false) {
+        return false;
+    }
+
+    query.bindValue(":programId", programId);
+    return executeQuery(query);
 }
 
 bool IrrigationDataSource::recordFiring(const FiredInstant& instant)
