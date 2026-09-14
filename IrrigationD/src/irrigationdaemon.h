@@ -69,6 +69,9 @@ private slots:
 private:
     void connectComponents();
 
+    /** @brief Returns whether @p zoneNumber has a zones row with enabled set. False when no row matches. */
+    bool isZoneEnabled(int zoneNumber);
+
     /** @brief Returns the earliest UTC instant at which any enabled program is next due. */
     QDateTime nextScheduledRunUtc(const QDateTime& nowUtc);
 

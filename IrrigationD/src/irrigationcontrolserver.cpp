@@ -286,9 +286,11 @@ QHttpServerResponse IrrigationControlServer::handleZoneRun(int zoneNumber,
 
     const ZoneList zones = _source->allZones();
     bool known = false;
+    bool enabled = false;
     for(const Zone& zone : zones) {
         if(zone.number == zoneNumber) {
             known = true;
+            enabled = zone.enabled;
             break;
         }
     }
@@ -302,6 +304,11 @@ QHttpServerResponse IrrigationControlServer::handleZoneRun(int zoneNumber,
     if(seconds < 1) {
         return QHttpServerResponse(QJsonObject{{"error", "seconds must be positive"}},
                                    QHttpServerResponder::StatusCode::BadRequest);
+    }
+
+    if(enabled == false) {
+        return QHttpServerResponse(QJsonObject{{"error", "zone is disabled"}},
+                                   QHttpServerResponder::StatusCode::Conflict);
     }
 
     emit manualZoneRunRequested(zoneNumber, seconds);

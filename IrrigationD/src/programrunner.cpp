@@ -75,9 +75,11 @@ bool ProgramRunner::advance()
     const ZoneList zones = _source->allZones();
 
     int zoneNumber = 0;
+    bool zoneEnabled = false;
     for(const Zone& zone : zones) {
         if(zone.id == next.zoneId) {
             zoneNumber = zone.number;
+            zoneEnabled = zone.enabled;
             break;
         }
     }
@@ -85,6 +87,12 @@ bool ProgramRunner::advance()
     if(zoneNumber == 0) {
         logText(LVL_ERROR, QString("Program %1 references unknown zone id %2")
                                .arg(_programId).arg(next.zoneId));
+        return advance();
+    }
+
+    if(zoneEnabled == false) {
+        logText(LVL_WARNING, QString("Program %1 skips disabled zone %2")
+                                 .arg(_programId).arg(zoneNumber));
         return advance();
     }
 

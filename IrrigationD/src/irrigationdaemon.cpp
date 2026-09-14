@@ -221,6 +221,9 @@ void IrrigationDaemon::onManualZoneRunRequested(int zoneNumber, int seconds)
     else if(_dataSource->isMasterEnabled() == false) {
         logText(LVL_WARNING, QString("Refused a manual run of zone %1: the master enable is off").arg(zoneNumber));
     }
+    else if(isZoneEnabled(zoneNumber) == false) {
+        logText(LVL_WARNING, QString("Refused a manual run of zone %1: the zone is disabled or has no database row").arg(zoneNumber));
+    }
     else {
         // abort() precedes openZone(): openZone() closes the open zone, and the
         // zoneClosed it emits advances a running program onto its next zone.
@@ -255,6 +258,19 @@ void IrrigationDaemon::onProgramRunRequested(int programId)
 
         publishStatus();
     }
+}
+
+bool IrrigationDaemon::isZoneEnabled(int zoneNumber)
+{
+    bool enabled = false;
+    const ZoneList zones = _dataSource->allZones();
+    for(const Zone& zone : zones) {
+        if(zone.number == zoneNumber) {
+            enabled = zone.enabled;
+            break;
+        }
+    }
+    return enabled;
 }
 
 void IrrigationDaemon::publishStatus()
