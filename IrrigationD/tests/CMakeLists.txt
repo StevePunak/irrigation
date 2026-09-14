@@ -44,6 +44,19 @@ irrigation_add_test(tst_zonecontroller
     ../src/zonecontroller.cpp
 )
 
+irrigation_add_test(tst_programrunner
+    tst_programrunner.cpp
+    ../src/programrunner.cpp
+    ../src/zonecontroller.cpp
+    ../src/database/irrigationdatasource.cpp
+    ../src/database/irrigation.qrc
+    ../src/model/zone.cpp
+    ../src/model/program.cpp
+    ../src/model/programstarttime.cpp
+    ../src/model/programzone.cpp
+    ../src/model/firedinstant.cpp
+)
+
 irrigation_add_test(tst_scheduler
     tst_scheduler.cpp
     ../src/scheduler.cpp
