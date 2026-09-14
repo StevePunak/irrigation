@@ -56,7 +56,8 @@ private slots:
     void allOffFailingInsideTripLeavesLatchUntilRetriedCloseLands();
     void closeRetriesAfterTwoConsecutiveWriteFailuresThenSucceeds();
     void closeRetryLandsWithinTwoRetryIntervals();
-    void allOffRetryInsideATripLandsWithinTwoRetryIntervals();
+    void allOffRetryLandsWithinOneRetryInterval();
+    void latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanOne();
     void watchdogTripsWhenTheOpenZonesLineDropsOut();
     void watchdogTripsWhenAForeignLineEnergisesWithAZoneOpen();
     void maxZoneSecondsNeverRisesPastTheHardCeiling();
@@ -404,7 +405,7 @@ void TestZoneController::closeRetryLandsWithinTwoRetryIntervals()
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
 }
 
-void TestZoneController::allOffRetryInsideATripLandsWithinTwoRetryIntervals()
+void TestZoneController::allOffRetryLandsWithinOneRetryInterval()
 {
     FaultBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
@@ -420,7 +421,37 @@ void TestZoneController::allOffRetryInsideATripLandsWithinTwoRetryIntervals()
     controller.triggerWatchdogForTest();
     QCOMPARE(controller.openZoneNumber(), 5);
 
-    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 2500);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 1300);
+}
+
+void TestZoneController::latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanOne()
+{
+    FaultBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    controller.setWatchdogInterval(TimeSpan::fromSeconds(60));
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(2, 811));
+
+    backend.failRead = true;
+    controller.triggerWatchdogForTest();
+    QVERIFY(controller.isFaulted());
+    QCOMPARE(controller.openZoneNumber(), 0);
+    backend.failRead = false;
+
+    for(int i = 0; i < 3; i++) {
+        backend.setLineValue(5, Gpio::Value::Active);
+        controller.triggerWatchdogForTest();
+        QVERIFY(controller.isFaulted());
+        QVERIFY(controller.openZone(6, 823) == false);
+    }
+
+    controller.triggerWatchdogForTest();
+
+    QVERIFY(controller.isFaulted() == false);
+    QVERIFY(controller.openZone(6, 823));
+    QCOMPARE(controller.openZoneNumber(), 6);
 }
 
 void TestZoneController::watchdogTripsWhenTheOpenZonesLineDropsOut()
