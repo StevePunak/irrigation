@@ -1,6 +1,11 @@
 #include "zonecontroller.h"
 
+#include <chrono>
 #include <limits>
+
+const TimeSpan ZoneController::RetryInterval           = TimeSpan::fromSeconds(1);
+const TimeSpan ZoneController::DefaultWatchdogInterval = TimeSpan::fromSeconds(1);
+const TimeSpan ZoneController::MinimumWatchdogInterval = TimeSpan::fromMilliseconds(50);
 
 ZoneController::ZoneController(IGpioBackend* backend,
                                const QMap<int, quint32>& zoneGpioMap,
@@ -10,13 +15,15 @@ ZoneController::ZoneController(IGpioBackend* backend,
     QObject(parent),
     LoggingBaseClass("zone"),
     _zoneGpioMap(zoneGpioMap),
+    _hardMaxZoneSeconds(maxZoneSeconds),
     _maxZoneSeconds(maxZoneSeconds),
-    _bank(new OutputBank(backend, QStringLiteral("irrigationd-zones"), zoneGpioMap.values(), activeLow, this))
+    _bank(new OutputBank(backend, QStringLiteral("irrigationd-zones"), zoneGpioMap.values(), activeLow, this)),
+    _deadline(QDeadlineTimer::Forever)
 {
     _closeTimer.setSingleShot(true);
     connect(&_closeTimer, &QTimer::timeout, this, &ZoneController::onCloseTimer);
 
-    _watchdogTimer.setInterval(1000);
+    setWatchdogInterval(DefaultWatchdogInterval);
     connect(&_watchdogTimer, &QTimer::timeout, this, &ZoneController::onWatchdogTimer);
 }
 
@@ -58,6 +65,12 @@ bool ZoneController::writeExclusive(int zoneNumber)
 
 bool ZoneController::openZone(int zoneNumber, int seconds)
 {
+    if(_faulted == true) {
+        _errorText = QString("Refused to open zone %1: the watchdog fault latch is set until a read-back matches the expected line state")
+                         .arg(zoneNumber);
+        return false;
+    }
+
     if(_zoneGpioMap.contains(zoneNumber) == false) {
         _errorText = QString("Unknown zone %1").arg(zoneNumber);
         return false;
@@ -75,10 +88,11 @@ bool ZoneController::openZone(int zoneNumber, int seconds)
         return false;
     }
 
+    const TimeSpan duration = TimeSpan::fromSeconds(clamped);
     _openZone = zoneNumber;
-    _deadlineUtc = QDateTime::currentDateTimeUtc().addSecs(clamped);
+    _deadline = QDeadlineTimer(std::chrono::seconds(clamped));
 
-    const qint64 timerMilliseconds = qMin<qint64>(static_cast<qint64>(clamped) * 1000,
+    const qint64 timerMilliseconds = qMin<qint64>(static_cast<qint64>(duration.totalMilliseconds()),
                                                   std::numeric_limits<int>::max());
     _closeTimer.setSingleShot(true);
     _closeTimer.start(static_cast<int>(timerMilliseconds));
@@ -95,6 +109,7 @@ bool ZoneController::allOff()
 {
     if(_bank->isRequested() == false) {
         _closeTimer.stop();
+        _deadline = QDeadlineTimer(QDeadlineTimer::Forever);
         if(_openZone != 0) {
             const int zoneNumber = _openZone;
             _openZone = 0;
@@ -107,14 +122,14 @@ bool ZoneController::allOff()
     if(writeExclusive(0) == false) {
         logText(LVL_ERROR, QString("allOff failed: %1").arg(_errorText));
         if(zoneNumber != 0) {
-            _closeTimer.start(RetryIntervalMilliseconds);
+            _closeTimer.start(static_cast<int>(RetryInterval.totalMilliseconds()));
         }
         return false;
     }
 
     _closeTimer.stop();
     _openZone = 0;
-    _deadlineUtc = QDateTime();
+    _deadline = QDeadlineTimer(QDeadlineTimer::Forever);
 
     if(zoneNumber != 0) {
         emit zoneClosed(zoneNumber);
@@ -125,18 +140,24 @@ bool ZoneController::allOff()
 
 int ZoneController::secondsRemaining() const
 {
-    if(_openZone == 0 || _deadlineUtc.isValid() == false) {
-        return 0;
+    int result = 0;
+    if(_openZone != 0 && _deadline.isForever() == false) {
+        const qint64 secondsLeft =
+            std::chrono::duration_cast<std::chrono::seconds>(_deadline.remainingTimeAsDuration()).count();
+        result = secondsLeft > 0 ? static_cast<int>(secondsLeft) : 0;
     }
+    return result;
+}
 
-    const qint64 secondsLeft = QDateTime::currentDateTimeUtc().secsTo(_deadlineUtc);
-    return secondsLeft > 0 ? static_cast<int>(secondsLeft) : 0;
+void ZoneController::setMaxZoneSeconds(int value)
+{
+    _maxZoneSeconds = qMin(qMax(value, 1), _hardMaxZoneSeconds);
 }
 
 void ZoneController::setWatchdogInterval(const TimeSpan& value)
 {
-    const int milliseconds = qMax(50, static_cast<int>(value.totalMilliseconds()));
-    _watchdogTimer.setInterval(milliseconds);
+    const TimeSpan interval = TimeSpan::max(MinimumWatchdogInterval, value);
+    _watchdogTimer.setInterval(static_cast<int>(interval.totalMilliseconds()));
 }
 
 void ZoneController::onCloseTimer()
@@ -148,11 +169,12 @@ void ZoneController::onCloseTimer()
     const int zoneNumber = _openZone;
     if(writeExclusive(0) == false) {
         logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(_errorText));
+        _closeTimer.start(static_cast<int>(RetryInterval.totalMilliseconds()));
         return;
     }
 
     _openZone = 0;
-    _deadlineUtc = QDateTime();
+    _deadline = QDeadlineTimer(QDeadlineTimer::Forever);
 
     emit zoneClosed(zoneNumber);
 }
@@ -162,28 +184,43 @@ void ZoneController::onWatchdogTimer()
     QMap<quint32, bool> actual;
     if(_bank->readValues(actual) == false) {
         logText(LVL_ERROR, QString("Watchdog could not read the bank: %1").arg(_bank->errorText()));
-        allOff();
-        return;
+        tripWatchdog();
     }
-
-    QMap<quint32, bool> expected;
-    for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
-        expected.insert(it.value(), it.key() == _openZone);
-    }
-    const bool mismatch = actual != expected;
-
-    const bool pastDeadline = _openZone != 0
-                              && _deadlineUtc.isValid()
-                              && QDateTime::currentDateTimeUtc() > _deadlineUtc;
-
-    if(mismatch || pastDeadline) {
-        const int trippedOn = _openZone;
-        logText(LVL_ERROR, QString("Watchdog tripped: open zone %1").arg(_openZone));
-        if(allOff() == true) {
-            emit watchdogTripped(trippedOn);
-        } else {
-            logText(LVL_ERROR, QString("Watchdog could not close the bank: %1").arg(_errorText));
+    else {
+        QMap<quint32, bool> expected;
+        for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
+            expected.insert(it.value(), it.key() == _openZone);
         }
+        const bool mismatch = actual != expected;
+
+        const bool pastDeadline = _openZone != 0
+                                  && _deadline.isForever() == false
+                                  && _deadline.hasExpired();
+
+        if(mismatch || pastDeadline) {
+            logText(LVL_ERROR, QString("Watchdog tripped: open zone %1").arg(_openZone));
+            tripWatchdog();
+        }
+        else if(_faulted == true && _openZone == 0) {
+            _faulted = false;
+            logText(LVL_WARNING, "Watchdog read-back matches the expected line state; fault latch cleared");
+        }
+    }
+}
+
+void ZoneController::tripWatchdog()
+{
+    const int trippedOn = _openZone;
+
+    // _faulted must be set before allOff(): allOff() emits zoneClosed synchronously,
+    // and a ProgramRunner answers it by calling openZone() on its next zone.
+    _faulted = true;
+
+    if(allOff() == true) {
+        emit watchdogTripped(trippedOn);
+    }
+    else {
+        logText(LVL_ERROR, QString("Watchdog could not close the bank: %1").arg(_errorText));
     }
 }
 
