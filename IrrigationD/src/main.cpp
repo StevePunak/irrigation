@@ -72,6 +72,7 @@ int main(int argc, char* argv[])
     // ⚠ start() reports that the worker thread started. Readiness of the
     //   components is a separate query on the daemon.
     IrrigationDaemon daemon(parser.value(keyConfig));
+    daemon.setVerboseLogging(parser.isSet(keyVerbose));
     daemon.start();
     if(daemon.isReady() == false) {
         Log::logText(LVL_ERROR, QString("Failed to start: %1").arg(daemon.errorText()));

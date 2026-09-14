@@ -96,6 +96,9 @@ signals:
     /** @brief Emitted when POST /admin/stop is accepted. */
     void stopRequested();
 
+    /** @brief Emitted after PUT /admin/settings has stored every value in its body. */
+    void settingsChanged();
+
 protected:
     virtual void threadStarted() override;
     virtual void threadAboutToFinish() override;

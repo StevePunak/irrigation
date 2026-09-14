@@ -677,6 +677,8 @@ QHttpServerResponse IrrigationControlServer::handleSettingsPut(const QHttpServer
         }
     }
 
+    emit settingsChanged();
+
     QJsonObject responseObject;
     for(const QString& key : SettingsKeys) {
         responseObject[key] = _source->settingValue(key);

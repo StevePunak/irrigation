@@ -9,6 +9,8 @@
 #include "zonecontroller.h"
 
 #include <Kanoop/commonexception.h>
+#include <Kanoop/log.h>
+#include <Kanoop/loggingtypes.h>
 #include <Kanoop/timespan.h>
 #include <Kanoop/pi/libgpiodbackend.h>
 
@@ -72,6 +74,8 @@ void IrrigationDaemon::threadStarted()
         if(_dataSource->pruneFiredInstantsOlderThan(QDateTime::currentDateTimeUtc().addDays(-FiredInstantRetentionDays)) == false) {
             logText(LVL_WARNING, "Failed to prune old fired instants");
         }
+
+        applyRuntimeSettings();
 
         _programRunner = new ProgramRunner(_zoneController, _dataSource);
         _scheduler = new Scheduler(_dataSource, &_clock);
@@ -168,6 +172,8 @@ void IrrigationDaemon::connectComponents()
             this, &IrrigationDaemon::onManualZoneRunRequested);
     connect(_controlServer, &IrrigationControlServer::programRunRequested,
             this, &IrrigationDaemon::onProgramRunRequested);
+    connect(_controlServer, &IrrigationControlServer::settingsChanged,
+            this, &IrrigationDaemon::onSettingsChanged);
     connect(_statusTimer, &QTimer::timeout, this, &IrrigationDaemon::publishStatus);
 }
 
@@ -257,6 +263,40 @@ void IrrigationDaemon::onProgramRunRequested(int programId)
         }
 
         publishStatus();
+    }
+}
+
+void IrrigationDaemon::onSettingsChanged()
+{
+    applyRuntimeSettings();
+}
+
+void IrrigationDaemon::applyRuntimeSettings()
+{
+    const int iniCeiling = _settings->maxZoneSeconds();
+    const QString storedCeiling = _dataSource->settingValue("max_zone_seconds");
+    bool parsed = false;
+    const int databaseCeiling = storedCeiling.toInt(&parsed);
+    _zoneController->setMaxZoneSeconds(parsed == true && databaseCeiling > 0 ? databaseCeiling : iniCeiling);
+    logText(LVL_INFO, QString("Zone ceiling is %1 seconds (database '%2', INI %3)")
+                          .arg(_zoneController->maxZoneSeconds()).arg(storedCeiling).arg(iniCeiling));
+
+    const QString levelName = _dataSource->settingValue("log_level");
+    if(_verboseLogging == true) {
+        logText(LVL_INFO, QString("Ignoring log_level '%1': --verbose was given").arg(levelName));
+    }
+    else if(levelName.isEmpty() == false) {
+        bool known = false;
+        for(Log::LogLevel level : Log::getLogLevels()) {
+            if(known == false && QString::compare(Log::getLogLevelString(level), levelName, Qt::CaseInsensitive) == 0) {
+                known = true;
+                logText(LVL_INFO, QString("Log level is %1").arg(Log::getLogLevelString(level)));
+                Log::setLevel(level);
+            }
+        }
+        if(known == false) {
+            logText(LVL_WARNING, QString("Ignoring unrecognised log_level '%1'").arg(levelName));
+        }
     }
 }
 

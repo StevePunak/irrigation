@@ -49,6 +49,9 @@ public:
      */
     virtual void abort() override;
 
+    /** @brief Sets whether --verbose was given. While true the database log_level is never applied. Call before start(). */
+    void setVerboseLogging(bool value) { _verboseLogging = value; }
+
     /** @brief Returns whether every component came up. Readable once a blocking start() has returned. */
     bool isReady() const { return _errorText.isEmpty(); }
 
@@ -64,10 +67,20 @@ private slots:
     void onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
     void onManualZoneRunRequested(int zoneNumber, int seconds);
     void onProgramRunRequested(int programId);
+    void onSettingsChanged();
     void publishStatus();
 
 private:
     void connectComponents();
+
+    /**
+     * @brief Applies the database max_zone_seconds and log_level.
+     *
+     * The zone ceiling becomes the database value bounded by the INI ceiling, or the INI
+     * ceiling when the database value is absent or not a positive integer. log_level is
+     * skipped while --verbose was given.
+     */
+    void applyRuntimeSettings();
 
     /** @brief Returns whether @p zoneNumber has a zones row with enabled set. False when no row matches. */
     bool isZoneEnabled(int zoneNumber);
@@ -81,6 +94,7 @@ private:
 
     QString _settingsPath;
     QString _errorText;
+    bool _verboseLogging = false;
 
     SystemClock _clock;
     IrrigationSettings* _settings = nullptr;
