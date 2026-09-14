@@ -108,7 +108,7 @@ Polled by the whole app. Fields are `ServerStatus` from the daemon plan's Task 9
 
 `dayMode` is one of `DaysOfWeek`, `Odd`, `Even`, `EveryNDays` — verbatim from the `DayModeToStringMap` in `IrrigationD/src/model/program.h`, which `Program::dayModeToString()` returns, and the `day_mode` column default in `schema.sql:17`. Read those strings from the source rather than inferring them from the `FiredInstant::Outcome` strings, which are lower-underscore (`ran`, `skipped_busy`) and follow a different convention. `dowMask` bit 0 is **Monday** and bit 6 is Sunday, matching `QDate::dayOfWeek()` minus one. `anchorDate` is a plain `YYYY-MM-DD` calendar date with no time and no zone; it is `null` unless `dayMode` is `EveryNDays`.
 
-`nextRunUtc` is **optional** — see **Known gaps**.
+`nextRunUtc` is **optional** in the decoder; the daemon sends it on every program today.
 
 ### `POST /api/programs` → 201, `PUT /api/programs/{id}` → 200
 
@@ -154,7 +154,7 @@ Everything below `web/`.
 | Path | Responsibility |
 |---|---|
 | `package.json` | Scripts and dependencies. `TZ=UTC` lives in the test scripts. |
-| `tsconfig.json` | Strict compiler settings. One project covering `src`, `scripts` and the two config files, so the type gate reaches all of them. |
+| `tsconfig.json` | Strict compiler settings. One project covering `src`, `scripts` and the three config files. `allowJs` without `checkJs` means the `.mjs` files under `scripts/` are parsed and never type-checked; their Vitest suite covers them. |
 | `vite.config.ts` | Build and dev-server config. Dev proxy `/api` → `127.0.0.1:8080/admin`. |
 | `vitest.config.ts` | jsdom environment, setup file, colocated test glob. Excludes `*.tz.test.ts`. |
 | `vitest.wallclock.config.ts` | The non-UTC run. No setup file, `*.tz.test.ts` only. |
@@ -2525,7 +2525,7 @@ describe('App', () => {
 })
 ```
 
-`falls back to now for anything else` covers `#/programs/12`. The editor in Task 8 is a screen state rather than a route, so a fragment with an id in it is not a route this app serves, and the fallback keeps a stale bookmark from rendering an empty shell.
+`falls back to now for anything else` covers `#/programs/12`. The editor in Task 8 is a screen state with no route, so a fragment with an id in it is not a route this app serves, and the fallback keeps a stale bookmark from rendering an empty shell.
 
 `follows a hash change from outside React` is the back-button case. State-only tabs pass the click test and fail this one — the URL changes, the screen does not, and the user is stuck.
 
@@ -4057,7 +4057,7 @@ git commit -m "feat: add the Programs list with day rules and computed totals"
 
 ### Task 8: Program editor — create, edit, delete
 
-The editor is a state of the Programs screen rather than a route, so a half-finished program cannot be reached by a bookmark and abandoned by a reload.
+The editor is a state of the Programs screen with no route of its own, so a half-finished program cannot be reached by a bookmark and abandoned by a reload.
 
 Two identifiers cross this screen in opposite directions and both are addressed here: the zone picker stores `zone.id` into `zones[].zoneId` because `program_zones.zone_id` is a foreign key, while the Now screen's manual run addresses `zone.number`. The fixtures keep them distinct so a swap cannot pass.
 
@@ -6155,7 +6155,7 @@ git commit --only -m "feat: add the production build guard and the web README" -
 
 Spec §8 is three screens, a polling interval and a timezone rule. Everything below was decided by this plan.
 
-**1. No router library.** Routing is the URL fragment, twenty lines in `App.tsx`. nginx's `try_files $uri $uri/ /index.html` would also support path routing, so the choice buys one fewer dependency in a bundle that has to be audited for network origins rather than any capability.
+**1. No router library.** Routing is the URL fragment, twenty lines in `App.tsx`. nginx's `try_files $uri $uri/ /index.html` would also support path routing. Fragment routing buys one fewer dependency in a bundle that has to be audited for network origins, and path routing would add no capability these three screens use.
 
 **2. No server-state library.** `useStatus` is a chained `setTimeout` in about sixty lines. The adaptive interval spec §8 asks for is the thing a caching library would be brought in to provide, and it is the part that would still have to be configured by hand.
 
@@ -6163,11 +6163,11 @@ Spec §8 is three screens, a polling interval and a timezone rule. Everything be
 
 **4. No ESLint.** The gates are `tsc --noEmit` under `strict` plus `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, and the test suite. That is the analogue of the daemon's `-Wextra -Wall -Werror`.
 
-**5. `fetch` is stubbed directly in tests** rather than through a mock service worker. The API surface is thirteen functions and the stub records every call, which is what the transposition assertions read.
+**5. `fetch` is stubbed directly in tests.** The API surface is thirteen functions and the stub records every call, which is what the transposition assertions read. A mock service worker would add a dependency to do the same job.
 
 **6. The quick manual run is one duration selector above eight run buttons**, defaulting to 10 minutes, offering 1/5/10/15/20/30. Per-tile duration controls would double the number of targets on the screen spec §8 wants operable with large touch targets.
 
-**7. The program editor is a screen state rather than a route.** A half-finished program cannot be reached by a bookmark or survive a reload, and `screenFromHash` sends `#/programs/12` to Now rather than rendering an editor with no data.
+**7. The program editor is a screen state of the Programs screen, with no route.** A half-finished program cannot be reached by a bookmark or survive a reload, and `screenFromHash` sends `#/programs/12` to Now.
 
 **8. Delete confirms; stop does not.** A deleted program cannot be recovered; a stopped valve can be restarted. The `confirm` stub in `NowScreen.test.tsx` throws so a dialog added to the e-stop fails loudly.
 
@@ -6187,7 +6187,7 @@ Three sessions work this tree on disjoint subtrees. These were established by th
 
 - **`dayMode` strings are PascalCase.** `DaysOfWeek`, `Odd`, `Even`, `EveryNDays`, from the `DayModeToStringMap` in `IrrigationD/src/model/program.h`, returned by `Program::dayModeToString()` and the `day_mode` column default in `schema.sql:17`. `FiredInstant::Outcome` uses a different convention (`ran`, `skipped_busy`); neither generalises to the other.
 - **`dayModeFromString()` returns `DaysOfWeek` for any unrecognised string**, with no error and no log entry. The decoder in Task 2 throws instead, and that throw is the only place a casing disagreement becomes visible.
-- **`GET /admin/programs` will carry a per-program `nextRunUtc`.** Ruled on the daemon side and recorded in its ledger for the Task 9 dispatch. This plan still decodes the field as optional, so the UI is correct whether or not that lands first.
+- **`GET /admin/programs` carries a per-program `nextRunUtc`**, computed by `Scheduler::nextRunUtc()` in `handleProgramsGet` (`IrrigationD/src/irrigationcontrolserver.cpp`) and in the program create and update responses. The decoder still treats it as optional.
 - **The document root is `/var/www/irrigation/html`** and the `irrigation-web_1.0.bb` recipe hard-fails the image build when `web/dist/` is missing or holds no `index.html`. There is no `nodejs` in the image; the bundle is static.
 - **nginx does `try_files $uri $uri/ /index.html`** and proxies `/api/` to `http://127.0.0.1:8080` with `Host`, `X-Real-IP`, `X-Forwarded-For` and `X-Forwarded-Proto` set. The daemon binds loopback only.
 - **`master_enabled` is `"0"` or `"1"` on the wire.** `isValidSettingValue()` in `IrrigationD/src/irrigationcontrolserver.cpp` rejects anything else with a 400, and `IrrigationDataSource::isMasterEnabled()` (`IrrigationD/src/database/irrigationdatasource.cpp`), shared by the scheduler, both manual-run paths and `/admin/status`, stops watering only when the stored value is exactly `"0"`.
@@ -6196,7 +6196,6 @@ Three sessions work this tree on disjoint subtrees. These were established by th
 
 ## Known gaps
 
-- **Per-program next run depends on a daemon field that is not yet written.** Until `GET /admin/programs` carries `nextRunUtc`, the Programs screen renders `—` in that position. Computing it in the browser would mean a second implementation of the scheduler's day rules and DST resolution, which is the part of the daemon most likely to drift.
 - **`/admin/health` and `/admin/version` are consumed by nothing.** The three screens in spec §8 have nowhere to put a version string, and adding a place for one is scope this plan does not have.
 - **The `log_level` setting is rendered by no screen.** Spec §8 lists four things on Settings and this is not one of them. The daemon plan carries the same row as a known gap on its side.
 - **There is no optimistic update anywhere.** Every write is followed by a reload or a status refresh. On a LAN with a loopback daemon that costs one round trip and removes a class of bug where the screen shows a state the controller rejected.
