@@ -60,9 +60,6 @@ namespace
         return reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     }
 
-    // Confirms the bound address by reading the kernel's own listening-socket table:
-    // QTcpServer's bound address is a private member of the worker thread's object and
-    // has no accessor exposed through IrrigationControlServer.
     bool listenerIsLoopbackOnly(quint16 port)
     {
         QFile procNetTcp("/proc/net/tcp");
@@ -89,6 +86,26 @@ namespace
         }
         return found && loopback;
     }
+
+    bool startServerOnLoopback(IrrigationControlServer& server)
+    {
+        server.setBindAddress("127.0.0.1");
+        server.setListenPort(0);
+        return server.start(TimeSpan::fromSeconds(5)) && server.waitUntilReady(TimeSpan::fromSeconds(5));
+    }
+
+    // Renumbers zone id 1 away from its seeded number so id and number diverge; no other
+    // zone's id equals the new number. Must run before IrrigationControlServer::start()
+    // opens its own connection on the same file.
+    void seedRenumberedZone(const QString& dbPath, int newNumber, bool enabled)
+    {
+        IrrigationDataSource seed(dbPath);
+        QVERIFY(seed.open());
+        bool ok = false;
+        seed.rawQuery(QString("UPDATE zones SET number = %1, enabled = %2 WHERE id = 1")
+                          .arg(newNumber).arg(enabled ? 1 : 0), &ok);
+        QVERIFY(ok);
+    }
 }
 
 class TestControlServer : public QObject
@@ -112,10 +129,11 @@ private slots:
     void updateStatusFromTheTestThreadAppearsInTheNextStatusGet();
 
     void zonesGetListsAllEightSeededZones();
-    void zonePutKeysOnZoneNumberNotZoneId();
+    void zonePutUpdatesTheZoneWhoseNumberMatches();
     void zonePutUnknownNumberReturns404();
     void zonePutMalformedBodyReturns400();
-    void zonePutMissingRequiredFieldReturns400();
+    void zonePutMissingOrInvalidFieldReturns400_data();
+    void zonePutMissingOrInvalidFieldReturns400();
 
     void zoneRunEmitsManualZoneRunRequestedWithTheExactZoneAndSeconds();
     void zoneRunUnknownZoneReturns404AndEmitsNothing();
@@ -128,6 +146,11 @@ private slots:
     void settingsGetReturnsExactlyTheFourAllowlistedKeys();
     void settingsPutRejectsInvalidValue_data();
     void settingsPutRejectsInvalidValue();
+    void settingsPutRejectsAMultiKeyBodyWhenAnyKeyIsInvalid();
+    void settingsPutRejectsNonStringValue_data();
+    void settingsPutRejectsNonStringValue();
+    void settingsPutMalformedBodyReturns400_data();
+    void settingsPutMalformedBodyReturns400();
     void settingsPutAcceptsValidValueAtBothEdges_data();
     void settingsPutAcceptsValidValueAtBothEdges();
     void settingsPutSuccessReadBackThroughGetAndSeparateDataSourceEmitsSignalOnce();
@@ -142,10 +165,7 @@ void TestControlServer::waitUntilReadyReturnsTrueImmediatelyOnASecondCall()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QElapsedTimer timer;
     timer.start();
@@ -159,10 +179,7 @@ void TestControlServer::waitUntilReadyIsResetAcrossStopThenStart()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
     QVERIFY(server.boundPort() != 0);
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
@@ -179,10 +196,7 @@ void TestControlServer::boundPortIsNonZeroAfterListeningOnPortZero()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QVERIFY(server.boundPort() != 0);
 
@@ -225,25 +239,19 @@ void TestControlServer::stopCompletesWithinItsTimeout()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QElapsedTimer timer;
     timer.start();
-    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
-    QVERIFY(timer.elapsed() < 5000);
+    QVERIFY(server.stop(TimeSpan::fromSeconds(10)));
+    QVERIFY(timer.elapsed() < 2000);
 }
 
 void TestControlServer::healthReturns200WithStatusOk()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/health");
@@ -259,10 +267,7 @@ void TestControlServer::versionReturns200WithTheApplicationVersion()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/version");
@@ -278,10 +283,7 @@ void TestControlServer::statusKeySetMatchesTheSerializer()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/status");
@@ -304,10 +306,7 @@ void TestControlServer::statusFieldTypesMatchTheWebDecoder()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/status");
@@ -328,40 +327,67 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
-
-    ServerStatus status;
-    status.runningZone = 4;
-    status.secondsRemaining = 137;
-    status.nextRunUtc = QDateTime(QDate(2026, 9, 20), QTime(13, 15, 0), QTimeZone::UTC);
-    status.rainDelayUntilUtc = QDateTime(QDate(2026, 9, 25), QTime(6, 30, 0), QTimeZone::UTC);
-    status.timezone = "America/Los_Angeles";
-    status.masterEnabled = true;
-    status.stopHeld = false;
-
-    // updateStatus() here runs on the test thread; delivery to the worker thread is asynchronous.
-    server.updateStatus(status);
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
-    QJsonObject body;
+
+    ServerStatus first;
+    first.runningZone = 4;
+    first.secondsRemaining = 137;
+    first.nextRunUtc = QDateTime(QDate(2026, 9, 20), QTime(13, 15, 0), QTimeZone::UTC);
+    first.rainDelayUntilUtc = QDateTime(QDate(2026, 9, 25), QTime(6, 30, 0), QTimeZone::UTC);
+    first.timezone = "America/Los_Angeles";
+    first.masterEnabled = true;
+    first.stopHeld = false;
+    server.updateStatus(first);
+
+    QJsonObject firstBody;
     for(int attempt = 0; attempt < 20; attempt++) {
         QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/status");
-        body = QJsonDocument::fromJson(reply->readAll()).object();
-        if(body.value("runningZone").toInt() == 4) {
+        firstBody = QJsonDocument::fromJson(reply->readAll()).object();
+        if(firstBody.value("runningZone").toInt() == 4) {
             break;
         }
     }
 
-    QCOMPARE(body.value("runningZone").toInt(), 4);
-    QCOMPARE(body.value("secondsRemaining").toInt(), 137);
-    QCOMPARE(body.value("nextRunUtc").toString(), status.nextRunUtc.toUTC().toString(Qt::ISODate));
-    QCOMPARE(body.value("rainDelayUntilUtc").toString(), status.rainDelayUntilUtc.toUTC().toString(Qt::ISODate));
-    QCOMPARE(body.value("timezone").toString(), QString("America/Los_Angeles"));
-    QCOMPARE(body.value("masterEnabled").toBool(), true);
-    QCOMPARE(body.value("stopHeld").toBool(), false);
+    QCOMPARE(firstBody.value("runningZone").toInt(), 4);
+    QCOMPARE(firstBody.value("secondsRemaining").toInt(), 137);
+    QCOMPARE(firstBody.value("nextRunUtc").toString(), first.nextRunUtc.toUTC().toString(Qt::ISODate));
+    QCOMPARE(firstBody.value("rainDelayUntilUtc").toString(), first.rainDelayUntilUtc.toUTC().toString(Qt::ISODate));
+    QCOMPARE(firstBody.value("timezone").toString(), QString("America/Los_Angeles"));
+    QCOMPARE(firstBody.value("masterEnabled").toBool(), true);
+    QCOMPARE(firstBody.value("stopHeld").toBool(), false);
+
+    // masterEnabled and stopHeld both true, so a formula deriving one bool from the other
+    // (or a hardcoded stopHeld) cannot satisfy this snapshot and the one above together.
+    // nextRunUtc is fed in a non-UTC zone so a serializer that skips the UTC conversion
+    // emits a different instant than the one asserted here.
+    ServerStatus second;
+    second.runningZone = 7;
+    second.secondsRemaining = 42;
+    second.nextRunUtc = QDateTime(QDate(2026, 11, 3), QTime(3, 5, 0), QTimeZone("America/Denver"));
+    second.rainDelayUntilUtc = QDateTime(QDate(2026, 11, 10), QTime(21, 50, 0), QTimeZone::UTC);
+    second.timezone = "Europe/London";
+    second.masterEnabled = true;
+    second.stopHeld = true;
+    server.updateStatus(second);
+
+    QJsonObject secondBody;
+    for(int attempt = 0; attempt < 20; attempt++) {
+        QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/status");
+        secondBody = QJsonDocument::fromJson(reply->readAll()).object();
+        if(secondBody.value("runningZone").toInt() == 7) {
+            break;
+        }
+    }
+
+    QCOMPARE(secondBody.value("runningZone").toInt(), 7);
+    QCOMPARE(secondBody.value("secondsRemaining").toInt(), 42);
+    QCOMPARE(secondBody.value("nextRunUtc").toString(), second.nextRunUtc.toUTC().toString(Qt::ISODate));
+    QCOMPARE(secondBody.value("rainDelayUntilUtc").toString(), second.rainDelayUntilUtc.toUTC().toString(Qt::ISODate));
+    QCOMPARE(secondBody.value("timezone").toString(), QString("Europe/London"));
+    QCOMPARE(secondBody.value("masterEnabled").toBool(), true);
+    QCOMPARE(secondBody.value("stopHeld").toBool(), true);
 
     server.stop(TimeSpan::fromSeconds(5));
 }
@@ -370,10 +396,7 @@ void TestControlServer::zonesGetListsAllEightSeededZones()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/zones");
@@ -392,26 +415,14 @@ void TestControlServer::zonesGetListsAllEightSeededZones()
     server.stop(TimeSpan::fromSeconds(5));
 }
 
-void TestControlServer::zonePutKeysOnZoneNumberNotZoneId()
+void TestControlServer::zonePutUpdatesTheZoneWhoseNumberMatches()
 {
     QTemporaryDir dir;
     const QString dbPath = dir.filePath("irrigation.db");
-
-    {
-        IrrigationDataSource seed(dbPath);
-        QVERIFY(seed.open());
-        // Breaks the id == number coincidence the schema seeds: once they diverge, a
-        // lookup keyed on id lands on a different row (or none).
-        bool renumbered = false;
-        seed.rawQuery("UPDATE zones SET number = 99 WHERE id = 1", &renumbered);
-        QVERIFY(renumbered);
-    }
+    seedRenumberedZone(dbPath, 99, true);
 
     IrrigationControlServer server(dbPath);
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/zones/99",
@@ -453,10 +464,7 @@ void TestControlServer::zonePutUnknownNumberReturns404()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/zones/999",
@@ -470,10 +478,7 @@ void TestControlServer::zonePutMalformedBodyReturns400()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/zones/1", "not json");
@@ -482,18 +487,25 @@ void TestControlServer::zonePutMalformedBodyReturns400()
     server.stop(TimeSpan::fromSeconds(5));
 }
 
-void TestControlServer::zonePutMissingRequiredFieldReturns400()
+void TestControlServer::zonePutMissingOrInvalidFieldReturns400_data()
 {
+    QTest::addColumn<QByteArray>("body");
+
+    QTest::newRow("enabled missing") << QByteArray(R"({"name": "Missing Enabled"})");
+    QTest::newRow("name missing") << QByteArray(R"({"enabled": true})");
+    QTest::newRow("enabled as a JSON string") << QByteArray(R"({"name": "Stringly Enabled", "enabled": "false"})");
+}
+
+void TestControlServer::zonePutMissingOrInvalidFieldReturns400()
+{
+    QFETCH(QByteArray, body);
+
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
-    QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/zones/1",
-                                   R"({"name": "Missing Enabled"})");
+    QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/zones/1", body);
     QCOMPARE(statusCode(reply), 400);
 
     server.stop(TimeSpan::fromSeconds(5));
@@ -502,25 +514,24 @@ void TestControlServer::zonePutMissingRequiredFieldReturns400()
 void TestControlServer::zoneRunEmitsManualZoneRunRequestedWithTheExactZoneAndSeconds()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    const QString dbPath = dir.filePath("irrigation.db");
+    seedRenumberedZone(dbPath, 99, true);
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::manualZoneRunRequested);
 
     QNetworkAccessManager manager;
-    // seconds (77) is kept distinct from the zone number (5) so a transposed
-    // emit(seconds, zoneNumber) would be caught.
-    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/5/run", R"({"seconds": 77})");
+    // seconds, the zone number and the zone's id must all stay numerically distinct.
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/99/run", R"({"seconds": 77})");
     QCOMPARE(statusCode(reply), 202);
 
     if(spy.count() == 0) {
         QVERIFY(spy.wait(5000));
     }
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(spy.first().at(0).toInt(), 5);
+    QCOMPARE(spy.first().at(0).toInt(), 99);
     QCOMPARE(spy.first().at(1).toInt(), 77);
 
     server.stop(TimeSpan::fromSeconds(5));
@@ -529,16 +540,18 @@ void TestControlServer::zoneRunEmitsManualZoneRunRequestedWithTheExactZoneAndSec
 void TestControlServer::zoneRunUnknownZoneReturns404AndEmitsNothing()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    const QString dbPath = dir.filePath("irrigation.db");
+    seedRenumberedZone(dbPath, 99, true);
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::manualZoneRunRequested);
 
     QNetworkAccessManager manager;
-    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/99/run", R"({"seconds": 60})");
+    // Number 1 belongs to no zone once id 1 is renumbered to 99, but id 1 still exists:
+    // a lookup keyed on id would find it.
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/1/run", R"({"seconds": 60})");
     QCOMPARE(statusCode(reply), 404);
 
     spy.wait(200);
@@ -550,16 +563,16 @@ void TestControlServer::zoneRunUnknownZoneReturns404AndEmitsNothing()
 void TestControlServer::zoneRunMalformedBodyReturns400AndEmitsNothing()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    const QString dbPath = dir.filePath("irrigation.db");
+    seedRenumberedZone(dbPath, 99, true);
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::manualZoneRunRequested);
 
     QNetworkAccessManager manager;
-    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/3/run", "not json");
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/99/run", "not json");
     QCOMPARE(statusCode(reply), 400);
 
     spy.wait(200);
@@ -571,27 +584,27 @@ void TestControlServer::zoneRunMalformedBodyReturns400AndEmitsNothing()
 void TestControlServer::zoneRunSecondsBoundaryAcceptsOneRejectsZero()
 {
     QTemporaryDir dir;
-    IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    const QString dbPath = dir.filePath("irrigation.db");
+    seedRenumberedZone(dbPath, 99, true);
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::manualZoneRunRequested);
     QNetworkAccessManager manager;
 
-    QNetworkReply* zero = postJson(manager, server.boundPort(), "/admin/zones/6/run", R"({"seconds": 0})");
+    QNetworkReply* zero = postJson(manager, server.boundPort(), "/admin/zones/99/run", R"({"seconds": 0})");
     QCOMPARE(statusCode(zero), 400);
     spy.wait(200);
     QCOMPARE(spy.count(), 0);
 
-    QNetworkReply* one = postJson(manager, server.boundPort(), "/admin/zones/6/run", R"({"seconds": 1})");
+    QNetworkReply* one = postJson(manager, server.boundPort(), "/admin/zones/99/run", R"({"seconds": 1})");
     QCOMPARE(statusCode(one), 202);
     if(spy.count() == 0) {
         QVERIFY(spy.wait(5000));
     }
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(spy.first().at(0).toInt(), 6);
+    QCOMPARE(spy.first().at(0).toInt(), 99);
     QCOMPARE(spy.first().at(1).toInt(), 1);
 
     server.stop(TimeSpan::fromSeconds(5));
@@ -601,25 +614,15 @@ void TestControlServer::zoneRunDisabledZoneReturns409AndEmitsNothing()
 {
     QTemporaryDir dir;
     const QString dbPath = dir.filePath("irrigation.db");
-
-    {
-        IrrigationDataSource seed(dbPath);
-        QVERIFY(seed.open());
-        bool disabled = false;
-        seed.rawQuery("UPDATE zones SET enabled = 0 WHERE number = 7", &disabled);
-        QVERIFY(disabled);
-    }
+    seedRenumberedZone(dbPath, 99, false);
 
     IrrigationControlServer server(dbPath);
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::manualZoneRunRequested);
 
     QNetworkAccessManager manager;
-    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/7/run", R"({"seconds": 30})");
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/zones/99/run", R"({"seconds": 30})");
     QCOMPARE(statusCode(reply), 409);
 
     spy.wait(200);
@@ -632,10 +635,7 @@ void TestControlServer::stopEmitsStopRequestedExactlyOnce()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::stopRequested);
 
@@ -655,10 +655,7 @@ void TestControlServer::settingsGetReturnsExactlyTheFourAllowlistedKeys()
 {
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/settings");
@@ -693,6 +690,9 @@ void TestControlServer::settingsPutRejectsInvalidValue_data()
     QTest::newRow("max_zone_seconds negative") << QString("max_zone_seconds") << QString("-5");
     QTest::newRow("max_zone_seconds non-numeric") << QString("max_zone_seconds") << QString("abc");
     QTest::newRow("log_level unknown name") << QString("log_level") << QString("Verbose");
+    QTest::newRow("master_enabled zero-padded") << QString("master_enabled") << QString("00");
+    QTest::newRow("master_enabled leading space") << QString("master_enabled") << QString(" 0");
+    QTest::newRow("master_enabled trailing space") << QString("master_enabled") << QString("0 ");
 }
 
 void TestControlServer::settingsPutRejectsInvalidValue()
@@ -703,10 +703,7 @@ void TestControlServer::settingsPutRejectsInvalidValue()
     QTemporaryDir dir;
     const QString dbPath = dir.filePath("irrigation.db");
     IrrigationControlServer server(dbPath);
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
     QNetworkAccessManager manager;
@@ -740,6 +737,107 @@ void TestControlServer::settingsPutRejectsInvalidValue()
     }
 }
 
+void TestControlServer::settingsPutRejectsAMultiKeyBodyWhenAnyKeyIsInvalid()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
+    QNetworkAccessManager manager;
+
+    // log_level (valid on its own) precedes master_enabled (invalid) in the wire body.
+    QNetworkReply* firstReply = putJson(manager, server.boundPort(), "/admin/settings",
+                                        R"({"log_level": "debug", "master_enabled": "true"})");
+    QCOMPARE(statusCode(firstReply), 400);
+
+    // master_enabled (valid on its own, and a value that differs from the default)
+    // precedes an unknown key.
+    QNetworkReply* secondReply = putJson(manager, server.boundPort(), "/admin/settings",
+                                         R"({"master_enabled": "0", "zzz_unknown_key": "1"})");
+    QCOMPARE(statusCode(secondReply), 400);
+
+    spy.wait(200);
+    QCOMPARE(spy.count(), 0);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    QCOMPARE(verify.settingValue("log_level"), QString("info"));
+    QCOMPARE(verify.settingValue("master_enabled"), QString("1"));
+}
+
+void TestControlServer::settingsPutRejectsNonStringValue_data()
+{
+    QTest::addColumn<QByteArray>("body");
+    QTest::addColumn<QString>("key");
+    QTest::addColumn<QString>("expectedUnchangedValue");
+
+    QTest::newRow("rain_delay_until as a JSON null")
+        << QByteArray(R"({"rain_delay_until": null})") << QString("rain_delay_until") << QString("");
+    QTest::newRow("max_zone_seconds as a JSON number")
+        << QByteArray(R"({"max_zone_seconds": 1800})") << QString("max_zone_seconds") << QString("3600");
+    QTest::newRow("master_enabled as a JSON boolean")
+        << QByteArray(R"({"master_enabled": true})") << QString("master_enabled") << QString("1");
+}
+
+void TestControlServer::settingsPutRejectsNonStringValue()
+{
+    QFETCH(QByteArray, body);
+    QFETCH(QString, key);
+    QFETCH(QString, expectedUnchangedValue);
+
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
+    QNetworkAccessManager manager;
+
+    QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/settings", body);
+    QCOMPARE(statusCode(reply), 400);
+
+    spy.wait(200);
+    QCOMPARE(spy.count(), 0);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+
+    IrrigationDataSource verify(dbPath);
+    QVERIFY(verify.open());
+    QCOMPARE(verify.settingValue(key), expectedUnchangedValue);
+}
+
+void TestControlServer::settingsPutMalformedBodyReturns400_data()
+{
+    QTest::addColumn<QByteArray>("body");
+
+    QTest::newRow("not JSON") << QByteArray("not json");
+    QTest::newRow("a JSON array body") << QByteArray("[]");
+}
+
+void TestControlServer::settingsPutMalformedBodyReturns400()
+{
+    QFETCH(QByteArray, body);
+
+    QTemporaryDir dir;
+    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    QVERIFY(startServerOnLoopback(server));
+
+    QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
+    QNetworkAccessManager manager;
+
+    QNetworkReply* reply = putJson(manager, server.boundPort(), "/admin/settings", body);
+    QCOMPARE(statusCode(reply), 400);
+
+    spy.wait(200);
+    QCOMPARE(spy.count(), 0);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
 void TestControlServer::settingsPutAcceptsValidValueAtBothEdges_data()
 {
     QTest::addColumn<QString>("key");
@@ -762,10 +860,7 @@ void TestControlServer::settingsPutAcceptsValidValueAtBothEdges()
 
     QTemporaryDir dir;
     IrrigationControlServer server(dir.filePath("irrigation.db"));
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
     const QJsonObject requestBody{ { key, value } };
@@ -785,13 +880,22 @@ void TestControlServer::settingsPutSuccessReadBackThroughGetAndSeparateDataSourc
     QTemporaryDir dir;
     const QString dbPath = dir.filePath("irrigation.db");
     IrrigationControlServer server(dbPath);
-    server.setBindAddress("127.0.0.1");
-    server.setListenPort(0);
-    QVERIFY(server.start(TimeSpan::fromSeconds(5)));
-    QVERIFY(server.waitUntilReady(TimeSpan::fromSeconds(5)));
+    QVERIFY(startServerOnLoopback(server));
 
     QSignalSpy spy(&server, &IrrigationControlServer::settingsChanged);
     QNetworkAccessManager manager;
+
+    // Qt::DirectConnection invokes this lambda synchronously on the server's worker
+    // thread, at the point settingsChanged is emitted; the connection it opens must
+    // be its own, since a QSqlDatabase connection is bound to the thread that opened it.
+    QString maxZoneSecondsAtEmit;
+    connect(&server, &IrrigationControlServer::settingsChanged, &server, [&maxZoneSecondsAtEmit, dbPath]()
+    {
+        IrrigationDataSource reader(dbPath);
+        if(reader.open()) {
+            maxZoneSecondsAtEmit = reader.settingValue("max_zone_seconds");
+        }
+    }, Qt::DirectConnection);
 
     // Four keys, four distinct values, none matching the schema defaults or each other.
     const QJsonObject requestBody{
@@ -808,6 +912,7 @@ void TestControlServer::settingsPutSuccessReadBackThroughGetAndSeparateDataSourc
         QVERIFY(spy.wait(5000));
     }
     QCOMPARE(spy.count(), 1);
+    QCOMPARE(maxZoneSecondsAtEmit, QString("1800"));
 
     QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/settings");
     const QJsonObject body = QJsonDocument::fromJson(getReply->readAll()).object();
