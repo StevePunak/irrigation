@@ -752,7 +752,7 @@ describe('decodePrograms', () => {
     expect(program?.zones[0]?.durationSeconds).toBe(600)
   })
 
-  it('rejects an unknown dayMode rather than defaulting', () => {
+  it('throws on an unknown dayMode', () => {
     expect(() => decodePrograms([{ ...goodProgram, dayMode: 'days_of_week' }])).toThrow(/dayMode/)
     expect(() => decodePrograms([{ ...goodProgram, dayMode: 'everyNDays' }])).toThrow(/dayMode/)
     expect(() => decodePrograms([{ ...goodProgram, dayMode: 'DAYSOFWEEK' }])).toThrow(/dayMode/)
@@ -762,6 +762,10 @@ describe('decodePrograms', () => {
     const { nextRunUtc, ...withoutNext } = goodProgram
     expect(nextRunUtc).toBeDefined()
     expect(decodePrograms([withoutNext])[0]?.nextRunUtc).toBeNull()
+  })
+
+  it('reads the empty anchorDate the daemon sends for an unset date as null', () => {
+    expect(decodePrograms([{ ...goodProgram, anchorDate: '' }])[0]?.anchorDate).toBeNull()
   })
 
   it('sorts zones by sequence', () => {
@@ -790,7 +794,7 @@ describe('decodeSettings', () => {
 })
 ```
 
-`rejects an unknown dayMode rather than defaulting` is the one that matters most. The daemon's `Program::dayModeFromString()` at `program.cpp:5-8` returns `DaysOfWeek` for any string it does not recognise, with no error and no log entry. If the two sides disagree on casing and the decoder defaults the same way, every `EveryNDays` program renders as a days-of-week program with a `dowMask` of 0 — the UI says it never runs while the controller waters every third day. Delete the `DAY_MODES.includes(...)` check and this test fails.
+`throws on an unknown dayMode` is the one that matters most. The daemon's `Program::dayModeFromString()` at `program.cpp:5-8` returns `DaysOfWeek` for any string it does not recognise, with no error and no log entry. If the two sides disagree on casing and the decoder defaults the same way, every `EveryNDays` program renders as a days-of-week program with a `dowMask` of 0 — the UI says it never runs while the controller waters every third day. Delete the `DAY_MODES.includes(...)` check and this test fails.
 
 `sorts zones by sequence` guards the ordering the daemon promises. `zonesFor()` is documented as ordered by `sequence`, and the Programs screen renders the run order; a client that trusts array order silently shows the wrong sequence the day a query loses its `ORDER BY`.
 
@@ -1488,14 +1492,14 @@ describe('formatClock', () => {
     expect(formatClock(instant, LA)).not.toBe(formatClock(instant, AUCKLAND))
   })
 
-  it('tracks a DST transition rather than a fixed offset', () => {
+  it('follows a DST transition in the zone offset', () => {
     // Same UTC wall clock either side of the spring transition. PST is UTC-8,
     // PDT is UTC-7, so the local hour differs by one.
     expect(formatClock('2026-01-08T18:00:00Z', LA)).toBe('10:00 AM')
     expect(formatClock('2026-03-12T18:00:00Z', LA)).toBe('11:00 AM')
   })
 
-  it('marks an unusable zone instead of falling back to the browser', () => {
+  it('marks an unusable zone with the invalid-zone marker', () => {
     expect(formatClock('2026-09-13T13:00:00Z', 'Not/AZone')).toBe(INVALID_ZONE_MARKER)
     expect(formatClock('2026-09-13T13:00:00Z', '')).toBe(INVALID_ZONE_MARKER)
   })
@@ -1513,7 +1517,7 @@ describe('formatDayAndClock', () => {
     expect(formatDayAndClock('2026-09-14T01:00:00Z', LA, now)).toBe('Today 6:00 PM')
   })
 
-  it('uses the controller zone for the day boundary, not the host zone', () => {
+  it('uses the controller zone for the day boundary', () => {
     // 2026-09-14T01:00:00Z is already the 14th in UTC and still the 13th in
     // Los Angeles. A host-zone day boundary calls this Tomorrow.
     expect(formatDayAndClock('2026-09-14T01:00:00Z', LA, now)).toMatch(/^Today/)
@@ -1530,6 +1534,16 @@ describe('formatDayAndClock', () => {
 
   it('adds the date beyond a week out', () => {
     expect(formatDayAndClock('2026-09-28T13:00:00Z', LA, now)).toBe('Mon 28 Sep 6:00 AM')
+  })
+
+  it('computes the day gap from calendar fields across a DST transition', () => {
+    // 2026-11-01 is when America/Los_Angeles falls back from PDT to PST.
+    // now: Oct 31 7:00 PM local (still PDT). target: Nov 6 6:00 PM local
+    // (already PST), six calendar days later. A raw millisecond gap between
+    // local midnights would cross the one-hour fallback and risk rounding to
+    // the wrong day count; the calendar-field gap must not.
+    const dstNow = Date.parse('2026-11-01T02:00:00Z')
+    expect(formatDayAndClock('2026-11-07T02:00:00Z', LA, dstNow)).toBe('Fri 6:00 PM')
   })
 })
 
@@ -1579,16 +1593,23 @@ describe('wall-clock minutes', () => {
     expect(inputValueToMinutes('25:00')).toBe(-1)
     expect(inputValueToMinutes('12:60')).toBe(-1)
   })
+
+  it('marks an out-of-range or NaN minute value', () => {
+    expect(minutesToClock(-1)).toBe(INVALID_ZONE_MARKER)
+    expect(minutesToClock(NaN)).toBe(INVALID_ZONE_MARKER)
+    expect(minutesToInputValue(-1)).toBe('00:00')
+    expect(minutesToInputValue(NaN)).toBe('00:00')
+  })
 })
 ```
 
 What each one kills:
 
 - `renders in the zone it is given` — delete `timeZone: zone` from the formatter options and, with `TZ=UTC` on the host, Los Angeles renders `1:00 PM`. That is the entire spec §8 requirement in one assertion, and the `TZ=UTC` guard in `src/test/setup.ts` is what keeps it honest.
-- `tracks a DST transition rather than a fixed offset` — replace the IANA zone with a numeric offset captured once from `/api/status` and one of the two assertions fails. This is why the contract carries a zone id.
+- `follows a DST transition in the zone offset` — replace the IANA zone with a numeric offset captured once from `/api/status` and one of the two assertions fails. This is why the contract carries a zone id.
 - `uses the controller zone for the day boundary` — compute "today" from `new Date().toDateString()` and the first assertion returns `Tomorrow`.
 - `converts minutes after midnight without consulting a timezone` — implement `minutesToClock` by constructing a `Date` and formatting it in a zone and every value shifts. A start time is a wall-clock rule; it has no instant to convert.
-- `marks an unusable zone instead of falling back to the browser` — a `catch` that retries without the `timeZone` option renders `1:00 PM` and fails. The marker is what makes a bad zone id visible on screen instead of a plausible wrong time.
+- `marks an unusable zone with the invalid-zone marker` — a `catch` that retries without the `timeZone` option renders `1:00 PM` and fails. The marker is what makes a bad zone id visible on screen instead of a plausible wrong time.
 
 - [ ] **Step 2: Run it and verify it fails**
 
@@ -1769,7 +1790,7 @@ export function minutesToClock(minutesAfterMidnight: number): string {
   return clockFromHourMinute(Math.floor(minutesAfterMidnight / 60), minutesAfterMidnight % 60)
 }
 
-/** Formats wall-clock minutes for an `<input type="time">` value. */
+/** Formats wall-clock minutes for an `<input type="time">` value. Invalid input yields `'00:00'`, indistinguishable from midnight. */
 export function minutesToInputValue(minutesAfterMidnight: number): string {
   if (isValidMinutes(minutesAfterMidnight) === false) {
     return '00:00'
@@ -1981,6 +2002,35 @@ describe('useStatus', () => {
     expect(result.current.error).toMatch(/Failed to fetch/)
   })
 
+  it('backs off to the idle interval after a failed poll, even mid-run', async () => {
+    const getStatus = vi
+      .spyOn(client, 'getStatus')
+      .mockResolvedValueOnce(runningStatus)
+      .mockRejectedValueOnce(new Error('Failed to fetch'))
+      .mockResolvedValue(runningStatus)
+
+    renderHook(() => useStatus())
+    await settle()
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    // The running poll schedules the next at 2 s; that one rejects.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    // After the failure the cadence must relax to 15 s, so 2 s buys nothing.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+  })
+
   it('clears the error on the next success', async () => {
     vi.spyOn(client, 'getStatus')
       .mockRejectedValueOnce(new Error('Failed to fetch'))
@@ -1999,7 +2049,7 @@ describe('useStatus', () => {
     expect(result.current.status?.runningZone).toBe(0)
   })
 
-  it('keeps polling after a failure rather than giving up', async () => {
+  it('keeps polling after a failure', async () => {
     const getStatus = vi.spyOn(client, 'getStatus').mockRejectedValue(new Error('Failed to fetch'))
     renderHook(() => useStatus())
     await settle()
@@ -2030,33 +2080,6 @@ describe('useStatus', () => {
       await vi.advanceTimersByTimeAsync(IDLE_POLL_MS)
     })
     expect(result.current.polls).toBe(2)
-  })
-
-  it('backs off to the idle interval after a failed poll, even mid-run', async () => {
-    const getStatus = vi
-      .spyOn(client, 'getStatus')
-      .mockResolvedValueOnce(runningStatus)
-      .mockRejectedValueOnce(new Error('Failed to fetch'))
-      .mockResolvedValue(runningStatus)
-
-    renderHook(() => useStatus())
-    await settle()
-    expect(getStatus).toHaveBeenCalledTimes(1)
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
-    })
-    expect(getStatus).toHaveBeenCalledTimes(2)
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
-    })
-    expect(getStatus).toHaveBeenCalledTimes(2)
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - RUNNING_POLL_MS)
-    })
-    expect(getStatus).toHaveBeenCalledTimes(3)
   })
 
   it('stops polling once unmounted', async () => {
@@ -2090,7 +2113,7 @@ describe('useStatus', () => {
     expect(getStatus).toHaveBeenCalledTimes(2)
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - 1)
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS - 1)
     })
     expect(getStatus).toHaveBeenCalledTimes(2)
   })
@@ -2122,6 +2145,66 @@ describe('useStatus', () => {
     })
     expect(getStatus).toHaveBeenCalledTimes(2)
   })
+
+  it('checks again at the running interval after a refresh that saw nothing running, then relaxes', async () => {
+    const getStatus = vi.spyOn(client, 'getStatus').mockResolvedValue(idleStatus)
+    const { result } = renderHook(() => useStatus())
+    await settle()
+
+    await act(async () => {
+      result.current.refresh()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS - 1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - 1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(4)
+  })
+
+  it('runs a refresh that arrives during a poll as soon as that poll settles', async () => {
+    let resolveFirst: ((value: typeof idleStatus) => void) | null = null
+    const getStatus = vi
+      .spyOn(client, 'getStatus')
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockResolvedValue(runningStatus)
+
+    const { result } = renderHook(() => useStatus())
+    await settle()
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      result.current.refresh()
+    })
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirst?.(idleStatus)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+  })
 })
 ```
 
@@ -2130,7 +2213,7 @@ What each one kills:
 - `polls every 15 s while idle` / `polls every 2 s while a zone is running` — a single hard-coded interval fails one of the two.
 - `tightens the interval as soon as a poll reports a run` — an interval captured once at mount into a `setInterval` fails. Reading the cadence off the status that just arrived is the whole point; a manual run started from the Now screen has to speed the poll up without a remount.
 - `keeps the last good status and marks it stale` — a handler that sets `status` to `null` on error blanks the running zone and the remaining time the moment wifi hiccups. The stop control has to stay usable through that.
-- `keeps polling after a failure rather than giving up` — a `catch` that returns without rescheduling leaves the page permanently frozen after one dropped packet, and the user sees a plausible stale screen forever.
+- `keeps polling after a failure` — a `catch` that returns without rescheduling leaves the page permanently frozen after one dropped packet, and the user sees a plausible stale screen forever.
 - `backs off to the idle interval after a failed poll, even mid-run` — the catch block leaves `next` at `IDLE_POLL_MS` on purpose. Restore `next = intervalFor(...)` there and an unreachable daemon gets hit every two seconds for as long as the page is open. No other case fails after a *running* poll, so nothing else catches it.
 - `resets when a new epoch repeats the previous seconds value` — every other countdown case moves `seconds` and `epoch` together, so a hook keyed on `seconds` passes all of them. Measured. This is the only combination that separates the two.
 - `stops polling once unmounted` — no cleanup and every navigation leaks a timer.
@@ -2177,6 +2260,7 @@ export function useStatus(): StatusState {
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)
+  const refreshQueued = useRef(false)
   const mounted = useRef(true)
 
   const poll = useCallback(async () => {
@@ -2184,6 +2268,8 @@ export function useStatus(): StatusState {
       return
     }
     inFlight.current = true
+    const afterRefresh = refreshQueued.current
+    refreshQueued.current = false
 
     let next = IDLE_POLL_MS
     try {
@@ -2194,7 +2280,8 @@ export function useStatus(): StatusState {
         setStale(false)
         setPolls((count) => count + 1)
       }
-      next = intervalFor(fresh)
+      // A run or stop request is answered before the daemon acts on it, so the poll a refresh triggers can predate the change.
+      next = afterRefresh ? RUNNING_POLL_MS : intervalFor(fresh)
     } catch (caught: unknown) {
       if (mounted.current) {
         setError(caught instanceof Error ? caught.message : String(caught))
@@ -2210,7 +2297,7 @@ export function useStatus(): StatusState {
       }
       timer.current = setTimeout(() => {
         void poll()
-      }, next)
+      }, refreshQueued.current ? 0 : next)
     }
   }, [])
 
@@ -2228,6 +2315,7 @@ export function useStatus(): StatusState {
   }, [poll])
 
   const refresh = useCallback(() => {
+    refreshQueued.current = true
     if (timer.current !== null) {
       clearTimeout(timer.current)
       timer.current = null
@@ -2812,7 +2900,7 @@ describe('NowScreen manual run', () => {
     expect(runZone).not.toHaveBeenCalled()
   })
 
-  it('surfaces a rejected run instead of swallowing it', async () => {
+  it('surfaces a rejected run', async () => {
     const user = userEvent.setup()
     vi.spyOn(client, 'runZone').mockRejectedValue(new ApiError(404, 'unknown zone'))
 
@@ -3500,6 +3588,12 @@ describe('dayRuleSummary', () => {
   it('ignores the mask when the mode is not DaysOfWeek', () => {
     expect(dayRuleSummary({ ...base, dayMode: 'Odd', dowMask: 0b1111111 })).toBe('Odd days')
   })
+
+  it('treats an out-of-range anchor date as unset', () => {
+    expect(
+      dayRuleSummary({ ...base, dayMode: 'EveryNDays', intervalDays: 3, anchorDate: '2026-13-01' }),
+    ).toBe('Every 3 days from an unset date')
+  })
 })
 
 describe('totalRuntimeSeconds', () => {
@@ -3765,6 +3859,16 @@ describe('ProgramsScreen', () => {
     expect(runProgram).toHaveBeenCalledWith(2)
   })
 
+  it('refreshes the status once a program run is accepted', async () => {
+    const user = userEvent.setup()
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('button', { name: /run now/i }))
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('sends the whole program when the enable toggle flips', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
@@ -3840,7 +3944,7 @@ describe('ProgramsScreen', () => {
 })
 
 describe('ProgramsScreen with no status', () => {
-  it('marks times it cannot place rather than guessing a zone', async () => {
+  it('marks the times it cannot place without a controller zone', async () => {
     render(<ProgramsScreen status={null} polls={0} refresh={refresh} />)
 
     const morning = await screen.findByTestId('program-1')
@@ -3868,7 +3972,7 @@ import { dayRuleSummary, toDraft, totalRuntimeSeconds } from '../programs/dayRul
 import { formatDayAndClock, formatDuration, minutesToClock } from '../time/zonedformat'
 import type { ScreenProps } from './screenProps'
 
-export default function ProgramsScreen({ status }: ScreenProps) {
+export default function ProgramsScreen({ status, refresh }: ScreenProps) {
   const [programs, setPrograms] = useState<Program[] | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -3909,13 +4013,17 @@ export default function ProgramsScreen({ status }: ScreenProps) {
     [load],
   )
 
-  const onRun = useCallback(async (program: Program) => {
-    try {
-      await runProgram(program.id)
-    } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [])
+  const onRun = useCallback(
+    async (program: Program) => {
+      try {
+        await runProgram(program.id)
+        refresh()
+      } catch (caught: unknown) {
+        setError(caught instanceof Error ? caught.message : String(caught))
+      }
+    },
+    [refresh],
+  )
 
   const controllerZone = status?.timezone ?? ''
 
@@ -4207,7 +4315,7 @@ describe('creating a program', () => {
     expect(onDone).toHaveBeenCalled()
   })
 
-  it('stores the zone database id, not the zone number', async () => {
+  it('stores the zone database id as zoneId', async () => {
     const user = userEvent.setup()
     const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
 
@@ -4420,6 +4528,41 @@ describe('blank start times', () => {
   })
 })
 
+describe('an editor opened before the controller timezone is known', () => {
+  it('refuses to save while the controller timezone is unknown', async () => {
+    const user = userEvent.setup()
+    const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
+
+    render(<ProgramEditor program={null} zones={zoneFixtures} controllerZone="" onDone={onDone} onCancel={onCancel} />)
+    await user.type(screen.getByLabelText(/program name/i), 'Evening')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/timezone is not known yet/i)
+    expect(createProgram).not.toHaveBeenCalled()
+  })
+
+  it('saves with the controller timezone once it arrives', async () => {
+    const user = userEvent.setup()
+    const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
+
+    const { rerender } = render(
+      <ProgramEditor program={null} zones={zoneFixtures} controllerZone="" onDone={onDone} onCancel={onCancel} />,
+    )
+    await user.type(screen.getByLabelText(/program name/i), 'Evening')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    rerender(<ProgramEditor program={null} zones={zoneFixtures} controllerZone={LA} onDone={onDone} onCancel={onCancel} />)
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(createProgram).toHaveBeenCalledTimes(1)
+    })
+    expect(createProgram.mock.calls[0]![0].startTimes).toEqual([{ minutesAfterMidnight: 360, timezone: LA }])
+  })
+})
+
 describe('deleting a program', () => {
   it('asks first and then deletes', async () => {
     const user = userEvent.setup()
@@ -4468,7 +4611,7 @@ describe('deleting a program', () => {
 
 What each one kills:
 
-- `stores the zone database id, not the zone number` reads the option's value and the option's visible label separately. The label shows `3 · Roses`, the value is `9`; an implementation that sets `value={zone.number}` renders an option labelled `3 · Roses` with value `3`, the assertion fails on the value, and the daemon would otherwise have inserted a foreign key pointing at a different valve.
+- `stores the zone database id as zoneId` reads the option's value and the option's visible label separately. The label shows `3 · Roses`, the value is `9`; an implementation that sets `value={zone.number}` renders an option labelled `3 · Roses` with value `3`, the assertion fails on the value, and the daemon would otherwise have inserted a foreign key pointing at a different valve.
 - `save renumbers zone sequence from the final array order after a move` and `...after removing a middle zone` assert the saved sequence numbers alongside the order. Reordering the array while keeping the stored sequences produces a program that renders in the new order in the browser and waters in the old order on the controller, because `zonesFor()` sorts by `sequence`. `onSave` is the only place sequences are renumbered, so these two tests guard that call.
 - `shows the surviving start time after removing an earlier one` fails for an uncontrolled `defaultValue` input: rows are keyed by index, so React reuses the removed row's node and displays its time over the surviving entry's.
 - `refuses to save while a start time is blank` and `names the row that is blank when several start times exist` fail when `onSave` reads only the draft. A cleared field leaves the draft holding the last time that parsed, so Save would send a time the screen no longer shows.
@@ -4521,6 +4664,9 @@ export function validationError(draft: ProgramDraft): string | null {
   }
   if (draft.startTimes.length === 0) {
     return 'Add at least one start time.'
+  }
+  if (draft.startTimes.some((start) => start.timezone.length === 0)) {
+    return 'The controller timezone is not known yet. Save again once the controller answers.'
   }
   if (draft.zones.length === 0) {
     return 'Add at least one zone.'
@@ -4584,7 +4730,14 @@ export default function ProgramEditor({
       return
     }
     // Sequence numbers in `draft.zones` are stale between edits; onSave is what makes them match array order.
-    const normalised: ProgramDraft = { ...draft, name: draft.name.trim(), zones: resequence(draft.zones) }
+    const normalised: ProgramDraft = {
+      ...draft,
+      name: draft.name.trim(),
+      startTimes: draft.startTimes.map((start) =>
+        start.timezone.length === 0 ? { ...start, timezone: controllerZone } : start,
+      ),
+      zones: resequence(draft.zones),
+    }
     const invalid = validationError(normalised)
     if (invalid !== null) {
       setError(invalid)
@@ -4604,7 +4757,7 @@ export default function ProgramEditor({
     } finally {
       setSaving(false)
     }
-  }, [draft, startTimeText, program, onDone])
+  }, [draft, startTimeText, program, controllerZone, onDone])
 
   const onDelete = useCallback(async () => {
     if (program === null) {
@@ -5036,7 +5189,7 @@ Expected: every editor case passes.
 
 - [ ] **Step 7: Prove the guards can fail**
 
-Change the zone picker's `value` to `String(candidate.id)` → `String(candidate.number)` and confirm `stores the zone database id, not the zone number` fails. Revert.
+Change the zone picker's `value` to `String(candidate.id)` → `String(candidate.number)` and confirm `stores the zone database id as zoneId` fails. Revert.
 
 Delete the `resequence(...)` call from `onSave` and confirm both `save renumbers zone sequence...` tests fail. Revert.
 
@@ -5132,7 +5285,7 @@ describe('parseInteger', () => {
     expect(parseInteger('half an hour', DEFAULT_MAX_ZONE_SECONDS)).toBe(3600)
   })
 
-  it('rejects a partially numeric string rather than truncating it', () => {
+  it('falls back for a partially numeric string', () => {
     expect(parseInteger('1800s', 60)).toBe(60)
     expect(parseInteger('18 00', 60)).toBe(60)
   })
@@ -5165,7 +5318,7 @@ describe('SETTING_KEYS', () => {
 
 `reads "0" as disabled` kills a truthiness read, since `Boolean('0')` is `true`. `reads every other spelling as enabled, as the daemon does` kills a spelling matcher that accepts `'false'` or `'off'`: the daemon waters on those, so the switch would show watering off while the valves run.
 
-`rejects a partially numeric string rather than truncating it` catches `parseInt('1800s')`, which returns 1800 and looks correct until the day the value is `'30m'` and the ceiling silently becomes 30 seconds.
+`falls back for a partially numeric string` catches `parseInt('1800s')`, which returns 1800 and looks correct until the day the value is `'30m'` and the ceiling silently becomes 30 seconds.
 
 - [ ] **Step 2: Run it and verify it fails**
 
@@ -5364,7 +5517,7 @@ describe('SettingsScreen', () => {
     expect(await screen.findByTestId('rain-delay-state')).toHaveTextContent('1:00 PM')
   })
 
-  it('shows no rain delay for an empty value rather than an invalid date', async () => {
+  it('shows no rain delay for an empty value', async () => {
     render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
     const state = await screen.findByTestId('rain-delay-state')
     expect(state).toHaveTextContent(/no rain delay/i)
@@ -5864,6 +6017,14 @@ describe('checkBundleDir', () => {
     expect(checkBundleDir(dir).join('\n')).toMatch(/tracker\.example\.com/)
   })
 
+  it('reports the daemon route prefix in an emitted asset', () => {
+    const dir = bundle({
+      'index.html': '<!doctype html><script src="/assets/app.js"></script>',
+      'assets/app.js': 'fetch("/admin/status")',
+    })
+    expect(checkBundleDir(dir).join('\n')).toMatch(/\/admin/)
+  })
+
   it('ignores source maps', () => {
     const dir = bundle({
       'index.html': '<!doctype html><script src="/assets/app.js"></script>',
@@ -5932,6 +6093,8 @@ const ALLOWED_PREFIXES = ['http://www.w3.org/', 'https://www.w3.org/', 'https://
 
 const SCANNED_EXTENSIONS = ['.html', '.js', '.mjs', '.css', '.json', '.svg']
 
+const DAEMON_PREFIX = '/admin'
+
 /** Returns every remote origin referenced in `text`, deduplicated. */
 export function scanForExternalOrigins(text) {
   const found = new Set()
@@ -5980,11 +6143,14 @@ export function checkBundleDir(dir) {
       continue
     }
 
-    const origins = scanForExternalOrigins(readFileSync(path, 'utf8'))
-    for (const origin of origins) {
+    const text = readFileSync(path, 'utf8')
+    for (const origin of scanForExternalOrigins(text)) {
       problems.push(
         `${relative(dir, path)} references ${origin} — the controller has no internet and the request will hang`,
       )
+    }
+    if (text.includes(DAEMON_PREFIX)) {
+      problems.push(`${relative(dir, path)} contains ${DAEMON_PREFIX} — the browser reaches the daemon only through /api`)
     }
   }
 
@@ -6048,6 +6214,10 @@ Spec: `../docs/design/2026-09-05-irrigation-design.md` §8.
 | `npm test` | Vitest under `TZ=UTC`, then the wall-clock suite under `TZ=America/Los_Angeles` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | typecheck, build to `dist/`, then the bundle guard |
+
+`npm run build` writes `dist/`. It is gitignored, it is what the `irrigation-web` Yocto recipe
+installs, and the recipe fails the image build when `dist/index.html` is missing, so build here
+before building an image.
 
 `TZ=UTC` is not optional. `src/test/setup.ts` aborts the suite on any other host
 zone: the timezone tests compare a rendering in `America/Los_Angeles` against the
