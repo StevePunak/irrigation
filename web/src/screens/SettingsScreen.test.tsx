@@ -140,7 +140,7 @@ describe('SettingsScreen', () => {
     expect(await screen.findByTestId('rain-delay-state')).toHaveTextContent('1:00 PM')
   })
 
-  it('shows no rain delay for an empty value rather than an invalid date', async () => {
+  it('shows no rain delay for an empty value', async () => {
     render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
     const state = await screen.findByTestId('rain-delay-state')
     expect(state).toHaveTextContent(/no rain delay/i)

@@ -81,7 +81,7 @@ describe('dayRuleSummary', () => {
     expect(dayRuleSummary({ ...base, dayMode: 'Odd', dowMask: 0b1111111 })).toBe('Odd days')
   })
 
-  it('treats an out-of-range anchor date as unset rather than rendering undefined', () => {
+  it('treats an out-of-range anchor date as unset', () => {
     expect(
       dayRuleSummary({ ...base, dayMode: 'EveryNDays', intervalDays: 3, anchorDate: '2026-13-01' }),
     ).toBe('Every 3 days from an unset date')

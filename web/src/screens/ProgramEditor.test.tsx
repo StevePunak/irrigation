@@ -124,7 +124,7 @@ describe('creating a program', () => {
     expect(onDone).toHaveBeenCalled()
   })
 
-  it('stores the zone database id, not the zone number', async () => {
+  it('stores the zone database id as zoneId', async () => {
     const user = userEvent.setup()
     const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
 
@@ -334,6 +334,41 @@ describe('blank start times', () => {
       expect(updateProgram).toHaveBeenCalledTimes(1)
     })
     expect(updateProgram.mock.calls[0]![1].startTimes[0]!.minutesAfterMidnight).toBe(450)
+  })
+})
+
+describe('an editor opened before the controller timezone is known', () => {
+  it('refuses to save while the controller timezone is unknown', async () => {
+    const user = userEvent.setup()
+    const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
+
+    render(<ProgramEditor program={null} zones={zoneFixtures} controllerZone="" onDone={onDone} onCancel={onCancel} />)
+    await user.type(screen.getByLabelText(/program name/i), 'Evening')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/timezone is not known yet/i)
+    expect(createProgram).not.toHaveBeenCalled()
+  })
+
+  it('saves with the controller timezone once it arrives', async () => {
+    const user = userEvent.setup()
+    const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
+
+    const { rerender } = render(
+      <ProgramEditor program={null} zones={zoneFixtures} controllerZone="" onDone={onDone} onCancel={onCancel} />,
+    )
+    await user.type(screen.getByLabelText(/program name/i), 'Evening')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    rerender(<ProgramEditor program={null} zones={zoneFixtures} controllerZone={LA} onDone={onDone} onCancel={onCancel} />)
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(createProgram).toHaveBeenCalledTimes(1)
+    })
+    expect(createProgram.mock.calls[0]![0].startTimes).toEqual([{ minutesAfterMidnight: 360, timezone: LA }])
   })
 })
 

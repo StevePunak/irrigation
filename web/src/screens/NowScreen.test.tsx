@@ -108,7 +108,7 @@ describe('NowScreen manual run', () => {
     expect(runZone).not.toHaveBeenCalled()
   })
 
-  it('surfaces a rejected run instead of swallowing it', async () => {
+  it('surfaces a rejected run', async () => {
     const user = userEvent.setup()
     vi.spyOn(client, 'runZone').mockRejectedValue(new ApiError(404, 'unknown zone'))
 

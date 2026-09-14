@@ -93,6 +93,16 @@ describe('ProgramsScreen', () => {
     expect(runProgram).toHaveBeenCalledWith(2)
   })
 
+  it('refreshes the status once a program run is accepted', async () => {
+    const user = userEvent.setup()
+    render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.click(within(await screen.findByTestId('program-1')).getByRole('button', { name: /run now/i }))
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('sends the whole program when the enable toggle flips', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
@@ -194,7 +204,7 @@ describe('ProgramsScreen', () => {
 })
 
 describe('ProgramsScreen with no status', () => {
-  it('marks times it cannot place rather than guessing a zone', async () => {
+  it('marks the times it cannot place without a controller zone', async () => {
     render(<ProgramsScreen status={null} polls={0} refresh={refresh} />)
 
     const morning = await screen.findByTestId('program-1')

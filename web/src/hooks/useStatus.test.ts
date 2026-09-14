@@ -174,7 +174,7 @@ describe('useStatus', () => {
     expect(result.current.status?.runningZone).toBe(0)
   })
 
-  it('keeps polling after a failure rather than giving up', async () => {
+  it('keeps polling after a failure', async () => {
     const getStatus = vi.spyOn(client, 'getStatus').mockRejectedValue(new Error('Failed to fetch'))
     renderHook(() => useStatus())
     await settle()
@@ -267,6 +267,66 @@ describe('useStatus', () => {
     })
     await act(async () => {
       await vi.advanceTimersByTimeAsync(IDLE_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('checks again at the running interval after a refresh that saw nothing running, then relaxes', async () => {
+    const getStatus = vi.spyOn(client, 'getStatus').mockResolvedValue(idleStatus)
+    const { result } = renderHook(() => useStatus())
+    await settle()
+
+    await act(async () => {
+      result.current.refresh()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS - 1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS - 1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(4)
+  })
+
+  it('runs a refresh that arrives during a poll as soon as that poll settles', async () => {
+    let resolveFirst: ((value: typeof idleStatus) => void) | null = null
+    const getStatus = vi
+      .spyOn(client, 'getStatus')
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockResolvedValue(runningStatus)
+
+    const { result } = renderHook(() => useStatus())
+    await settle()
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      result.current.refresh()
+    })
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirst?.(idleStatus)
+      await vi.advanceTimersByTimeAsync(0)
     })
     expect(getStatus).toHaveBeenCalledTimes(2)
   })

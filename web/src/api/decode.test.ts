@@ -85,7 +85,7 @@ describe('decodePrograms', () => {
     expect(program?.zones[0]?.durationSeconds).toBe(600)
   })
 
-  it('rejects an unknown dayMode rather than defaulting', () => {
+  it('throws on an unknown dayMode', () => {
     expect(() => decodePrograms([{ ...goodProgram, dayMode: 'days_of_week' }])).toThrow(/dayMode/)
     expect(() => decodePrograms([{ ...goodProgram, dayMode: 'everyNDays' }])).toThrow(/dayMode/)
     expect(() => decodePrograms([{ ...goodProgram, dayMode: 'DAYSOFWEEK' }])).toThrow(/dayMode/)
@@ -95,6 +95,10 @@ describe('decodePrograms', () => {
     const { nextRunUtc, ...withoutNext } = goodProgram
     expect(nextRunUtc).toBeDefined()
     expect(decodePrograms([withoutNext])[0]?.nextRunUtc).toBeNull()
+  })
+
+  it('reads the empty anchorDate the daemon sends for an unset date as null', () => {
+    expect(decodePrograms([{ ...goodProgram, anchorDate: '' }])[0]?.anchorDate).toBeNull()
   })
 
   it('sorts zones by sequence', () => {

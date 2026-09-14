@@ -138,6 +138,14 @@ describe('checkBundleDir', () => {
     expect(checkBundleDir(dir).join('\n')).toMatch(/tracker\.example\.com/)
   })
 
+  it('reports the daemon route prefix in an emitted asset', () => {
+    const dir = bundle({
+      'index.html': '<!doctype html><script src="/assets/app.js"></script>',
+      'assets/app.js': 'fetch("/admin/status")',
+    })
+    expect(checkBundleDir(dir).join('\n')).toMatch(/\/admin/)
+  })
+
   it('ignores source maps', () => {
     const dir = bundle({
       'index.html': '<!doctype html><script src="/assets/app.js"></script>',

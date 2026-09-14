@@ -24,14 +24,14 @@ describe('formatClock', () => {
     expect(formatClock(instant, LA)).not.toBe(formatClock(instant, AUCKLAND))
   })
 
-  it('tracks a DST transition rather than a fixed offset', () => {
+  it('follows a DST transition in the zone offset', () => {
     // Same UTC wall clock either side of the spring transition. PST is UTC-8,
     // PDT is UTC-7, so the local hour differs by one.
     expect(formatClock('2026-01-08T18:00:00Z', LA)).toBe('10:00 AM')
     expect(formatClock('2026-03-12T18:00:00Z', LA)).toBe('11:00 AM')
   })
 
-  it('marks an unusable zone instead of falling back to the browser', () => {
+  it('marks an unusable zone with the invalid-zone marker', () => {
     expect(formatClock('2026-09-13T13:00:00Z', 'Not/AZone')).toBe(INVALID_ZONE_MARKER)
     expect(formatClock('2026-09-13T13:00:00Z', '')).toBe(INVALID_ZONE_MARKER)
   })
@@ -49,7 +49,7 @@ describe('formatDayAndClock', () => {
     expect(formatDayAndClock('2026-09-14T01:00:00Z', LA, now)).toBe('Today 6:00 PM')
   })
 
-  it('uses the controller zone for the day boundary, not the host zone', () => {
+  it('uses the controller zone for the day boundary', () => {
     // 2026-09-14T01:00:00Z is already the 14th in UTC and still the 13th in
     // Los Angeles. A host-zone day boundary calls this Tomorrow.
     expect(formatDayAndClock('2026-09-14T01:00:00Z', LA, now)).toMatch(/^Today/)
@@ -126,7 +126,7 @@ describe('wall-clock minutes', () => {
     expect(inputValueToMinutes('12:60')).toBe(-1)
   })
 
-  it('marks rather than launders an out-of-range or NaN minute value', () => {
+  it('marks an out-of-range or NaN minute value', () => {
     expect(minutesToClock(-1)).toBe(INVALID_ZONE_MARKER)
     expect(minutesToClock(NaN)).toBe(INVALID_ZONE_MARKER)
     expect(minutesToInputValue(-1)).toBe('00:00')

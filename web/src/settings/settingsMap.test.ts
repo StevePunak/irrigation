@@ -48,7 +48,7 @@ describe('parseInteger', () => {
     expect(parseInteger('half an hour', DEFAULT_MAX_ZONE_SECONDS)).toBe(3600)
   })
 
-  it('rejects a partially numeric string rather than truncating it', () => {
+  it('falls back for a partially numeric string', () => {
     expect(parseInteger('1800s', 60)).toBe(60)
     expect(parseInteger('18 00', 60)).toBe(60)
   })
