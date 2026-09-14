@@ -106,7 +106,7 @@ Polled by the whole app. Fields are `ServerStatus` from the daemon plan's Task 9
 }]
 ```
 
-`dayMode` is one of `DaysOfWeek`, `Odd`, `Even`, `EveryNDays` — verbatim from `Program::dayModeToString()` at `IrrigationD/src/model/program.cpp:17-25`, committed at `f077d57`, and the `day_mode` column default in `schema.sql:17`. Read those strings from the source rather than inferring them from the `FiredInstant::Outcome` strings, which are lower-underscore (`ran`, `skipped_busy`) and follow a different convention. `dowMask` bit 0 is **Monday** and bit 6 is Sunday, matching `QDate::dayOfWeek()` minus one. `anchorDate` is a plain `YYYY-MM-DD` calendar date with no time and no zone; it is `null` unless `dayMode` is `EveryNDays`.
+`dayMode` is one of `DaysOfWeek`, `Odd`, `Even`, `EveryNDays` — verbatim from the `DayModeToStringMap` in `IrrigationD/src/model/program.h`, which `Program::dayModeToString()` returns, and the `day_mode` column default in `schema.sql:17`. Read those strings from the source rather than inferring them from the `FiredInstant::Outcome` strings, which are lower-underscore (`ran`, `skipped_busy`) and follow a different convention. `dowMask` bit 0 is **Monday** and bit 6 is Sunday, matching `QDate::dayOfWeek()` minus one. `anchorDate` is a plain `YYYY-MM-DD` calendar date with no time and no zone; it is `null` unless `dayMode` is `EveryNDays`.
 
 `nextRunUtc` is **optional** — see **Known gaps**.
 
@@ -790,7 +790,7 @@ describe('decodeSettings', () => {
 })
 ```
 
-`rejects an unknown dayMode rather than defaulting` is the one that matters most. The daemon's `Program::dayModeFromString()` at `program.cpp:4-15` returns `DaysOfWeek` for any string it does not recognise, with no error and no log entry. If the two sides disagree on casing and the decoder defaults the same way, every `EveryNDays` program renders as a days-of-week program with a `dowMask` of 0 — the UI says it never runs while the controller waters every third day. Delete the `DAY_MODES.includes(...)` check and this test fails.
+`rejects an unknown dayMode rather than defaulting` is the one that matters most. The daemon's `Program::dayModeFromString()` at `program.cpp:5-8` returns `DaysOfWeek` for any string it does not recognise, with no error and no log entry. If the two sides disagree on casing and the decoder defaults the same way, every `EveryNDays` program renders as a days-of-week program with a `dowMask` of 0 — the UI says it never runs while the controller waters every third day. Delete the `DAY_MODES.includes(...)` check and this test fails.
 
 `sorts zones by sequence` guards the ordering the daemon promises. `zonesFor()` is documented as ordered by `sequence`, and the Programs screen renders the run order; a client that trusts array order silently shows the wrong sequence the day a query loses its `ORDER BY`.
 
@@ -5726,15 +5726,24 @@ Install nothing. The guard and its test are plain JavaScript, and the test runs 
 ```js
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { checkBundleDir, scanForExternalOrigins } from './checkBundle.mjs'
+
+const temporaryDirs = []
+
+afterEach(() => {
+  for (const dir of temporaryDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 function bundle(files) {
   const dir = mkdtempSync(join(tmpdir(), 'irrigation-bundle-'))
+  temporaryDirs.push(dir)
   for (const [name, content] of Object.entries(files)) {
     const path = join(dir, name)
     mkdirSync(join(path, '..'), { recursive: true })
@@ -5767,6 +5776,27 @@ describe('scanForExternalOrigins', () => {
     expect(scanForExternalOrigins('fetch("https://api.weather.example.com/v1")')).toContain(
       'https://api.weather.example.com',
     )
+  })
+
+  it('finds a host given as an ip address, with or without a port', () => {
+    expect(scanForExternalOrigins('fetch("http://203.0.113.5/api")')).toContain('http://203.0.113.5')
+    expect(scanForExternalOrigins('fetch("http://192.168.1.50:8080/api")')).toContain('http://192.168.1.50:8080')
+  })
+
+  it('finds a development-machine url on localhost', () => {
+    expect(scanForExternalOrigins('fetch("http://localhost:8080/admin/status")')).toContain('http://localhost:8080')
+  })
+
+  it('finds a websocket origin', () => {
+    expect(scanForExternalOrigins('new WebSocket("ws://192.168.1.50:9000/socket")')).toContain('ws://192.168.1.50:9000')
+  })
+
+  it('ignores a protocol-relative double slash with no dotted host after it', () => {
+    expect(scanForExternalOrigins('const separator = "//section"')).toEqual([])
+  })
+
+  it('matches the allowlist regardless of letter case', () => {
+    expect(scanForExternalOrigins('<svg xmlns="HTTP://WWW.W3.ORG/2000/svg"></svg>')).toEqual([])
   })
 
   it('allows the XML namespace urls that svg markup carries', () => {
@@ -5847,6 +5877,7 @@ describe('checkBundleDir', () => {
 describe('the build-step command', () => {
   function copyCommand() {
     const dir = mkdtempSync(join(tmpdir(), 'irrigation bundle command '))
+    temporaryDirs.push(dir)
     for (const name of ['checkBundle.mjs', 'checkBundleCli.mjs']) {
       copyFileSync(fileURLToPath(new URL(name, import.meta.url)), join(dir, name))
     }
@@ -5876,6 +5907,8 @@ describe('the build-step command', () => {
 
 `exits non-zero naming the origin, even from a path containing spaces` runs the command file the way `npm run build` does, from a copied location whose path holds spaces. A single-file script that decides whether it was invoked directly by comparing `import.meta.url` with `process.argv[1]` sees a percent-encoded url there, exits 0, and scans nothing.
 
+`finds a host given as an ip address, with or without a port`, `finds a development-machine url on localhost` and `finds a websocket origin` cover the absolute urls a development machine leaks: an ip address or `localhost` has no letters after its last dot, so a host pattern that demands a top-level domain never sees them. `ignores a protocol-relative double slash with no dotted host after it` keeps a stray `//word` in minified code from failing the build. `matches the allowlist regardless of letter case` holds the allowlist to the same case rule as the pattern.
+
 - [ ] **Step 3: Run it and verify it fails**
 
 ```bash
@@ -5892,7 +5925,7 @@ Expected: failure — `scripts/checkBundle.mjs` does not exist.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-const URL_PATTERN = /((?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,})([^\s"'`()<>]*)/gi
+const URL_PATTERN = /((?:https?|wss?):\/\/[a-z0-9.-]+(?::\d+)?|\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?)([^\s"'`()<>]*)/gi
 
 /** Matched against the whole url, so every entry must end in "/" or a lookalike host passes. */
 const ALLOWED_PREFIXES = ['http://www.w3.org/', 'https://www.w3.org/', 'https://react.dev/errors/']
@@ -5903,7 +5936,8 @@ const SCANNED_EXTENSIONS = ['.html', '.js', '.mjs', '.css', '.json', '.svg']
 export function scanForExternalOrigins(text) {
   const found = new Set()
   for (const match of text.matchAll(URL_PATTERN)) {
-    if (ALLOWED_PREFIXES.some((allowed) => match[0].startsWith(allowed))) {
+    const url = match[0].toLowerCase()
+    if (ALLOWED_PREFIXES.some((allowed) => url.startsWith(allowed))) {
       continue
     }
     found.add(match[1])
@@ -6057,7 +6091,8 @@ time is a wall-clock rule with no instant behind it and is converted by
 
 `dowMask` bit 0 is **Monday**, bit 6 is Sunday — `QDate::dayOfWeek()` minus one.
 `dayMode` strings are `DaysOfWeek`, `Odd`, `Even`, `EveryNDays`, taken verbatim
-from `Program::dayModeToString()` in `IrrigationD/src/model/program.cpp`.
+from the `DayModeToStringMap` behind `Program::dayModeToString()`, in
+`IrrigationD/src/model/program.h`.
 ```
 
 - [ ] **Step 8: Run the whole suite one more time**
@@ -6150,7 +6185,7 @@ Spec §8 is three screens, a polling interval and a timezone rule. Everything be
 
 Three sessions work this tree on disjoint subtrees. These were established by the others and are recorded here so this plan's executor does not re-derive them.
 
-- **`dayMode` strings are PascalCase.** `DaysOfWeek`, `Odd`, `Even`, `EveryNDays`, from `IrrigationD/src/model/program.cpp:17-25` (committed at `f077d57`) and the `day_mode` column default in `schema.sql:17`. `FiredInstant::Outcome` uses a different convention (`ran`, `skipped_busy`); neither generalises to the other.
+- **`dayMode` strings are PascalCase.** `DaysOfWeek`, `Odd`, `Even`, `EveryNDays`, from the `DayModeToStringMap` in `IrrigationD/src/model/program.h`, returned by `Program::dayModeToString()` and the `day_mode` column default in `schema.sql:17`. `FiredInstant::Outcome` uses a different convention (`ran`, `skipped_busy`); neither generalises to the other.
 - **`dayModeFromString()` returns `DaysOfWeek` for any unrecognised string**, with no error and no log entry. The decoder in Task 2 throws instead, and that throw is the only place a casing disagreement becomes visible.
 - **`GET /admin/programs` will carry a per-program `nextRunUtc`.** Ruled on the daemon side and recorded in its ledger for the Task 9 dispatch. This plan still decodes the field as optional, so the UI is correct whether or not that lands first.
 - **The document root is `/var/www/irrigation/html`** and the `irrigation-web_1.0.bb` recipe hard-fails the image build when `web/dist/` is missing or holds no `index.html`. There is no `nodejs` in the image; the bundle is static.
