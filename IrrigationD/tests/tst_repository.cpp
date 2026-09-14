@@ -21,6 +21,13 @@ private slots:
     void updateProgramChangesFields();
     void enabledProgramsExcludesDisabled();
     void settingValueRoundTrips();
+    void setFiringOutcomeMatchesTheExactKeyOnly();
+    void pruneFiredInstantsOlderThanIsExclusiveOfTheCutoff();
+    void deleteStartTimeRemovesOnlyThatRow();
+    void deleteProgramZonesLeavesOtherProgramsIntact();
+    void isMasterEnabledOnlyExactZeroDisables_data();
+    void isMasterEnabledOnlyExactZeroDisables();
+    void isMasterEnabledDefaultsToEnabledWhenAbsent();
 };
 
 void TestRepository::recordFiringIsIdempotent()
@@ -334,6 +341,197 @@ void TestRepository::settingValueRoundTrips()
     QCOMPARE(source.settingValue("max_zone_seconds"), QString("1800"));
 
     QVERIFY(source.settingValue("no_such_key").isEmpty());
+}
+
+void TestRepository::setFiringOutcomeMatchesTheExactKeyOnly()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Morning";
+    QVERIFY(source.insertProgram(program));
+
+    FiredInstant first;
+    first.programId = program.id;
+    // Distinct startTimeId and instant per row: an unqualified UPDATE would touch all three.
+    first.startTimeId = 41;
+    first.scheduledAtUtc = QDateTime(QDate(2026, 9, 12), QTime(6, 0), QTimeZone::UTC);
+    first.outcome = FiredInstant::Outcome::Ran;
+    QVERIFY(source.recordFiring(first));
+
+    // Shares program and start time with the target row; only the instant differs, which
+    // pins the WHERE clause's scheduled_at_utc term rather than just program_id/start_time_id.
+    FiredInstant sameKeyDifferentInstant = first;
+    sameKeyDifferentInstant.scheduledAtUtc = QDateTime(QDate(2026, 9, 13), QTime(6, 0), QTimeZone::UTC);
+    QVERIFY(source.recordFiring(sameKeyDifferentInstant));
+
+    FiredInstant differentStartTime = first;
+    differentStartTime.startTimeId = 42;
+    differentStartTime.scheduledAtUtc = QDateTime(QDate(2026, 9, 12), QTime(7, 0), QTimeZone::UTC);
+    QVERIFY(source.recordFiring(differentStartTime));
+
+    QVERIFY(source.setFiringOutcome(first.programId, first.startTimeId, first.scheduledAtUtc,
+                                     FiredInstant::Outcome::SkippedStop));
+
+    bool ok = false;
+    QSqlQuery firstRow = source.rawQuery(
+        QString("SELECT outcome FROM fired_instants WHERE program_id = %1 AND start_time_id = %2 AND scheduled_at_utc = '%3'")
+            .arg(first.programId).arg(first.startTimeId).arg(first.scheduledAtUtc.toUTC().toString(Qt::ISODate)), &ok);
+    QVERIFY(ok);
+    QVERIFY(firstRow.next());
+    QCOMPARE(firstRow.value(0).toString(), QString("skipped_stop"));
+
+    QSqlQuery sameKeyRow = source.rawQuery(
+        QString("SELECT outcome FROM fired_instants WHERE program_id = %1 AND start_time_id = %2 AND scheduled_at_utc = '%3'")
+            .arg(sameKeyDifferentInstant.programId).arg(sameKeyDifferentInstant.startTimeId)
+            .arg(sameKeyDifferentInstant.scheduledAtUtc.toUTC().toString(Qt::ISODate)), &ok);
+    QVERIFY(ok);
+    QVERIFY(sameKeyRow.next());
+    QCOMPARE(sameKeyRow.value(0).toString(), QString("ran"));
+
+    QSqlQuery differentStartTimeRow = source.rawQuery(
+        QString("SELECT outcome FROM fired_instants WHERE program_id = %1 AND start_time_id = %2")
+            .arg(differentStartTime.programId).arg(differentStartTime.startTimeId), &ok);
+    QVERIFY(ok);
+    QVERIFY(differentStartTimeRow.next());
+    QCOMPARE(differentStartTimeRow.value(0).toString(), QString("ran"));
+
+    // No row matches this instant: zero rows changed.
+    QVERIFY(source.setFiringOutcome(first.programId, first.startTimeId,
+                                     QDateTime(QDate(2026, 9, 14), QTime(6, 0), QTimeZone::UTC),
+                                     FiredInstant::Outcome::Failed) == false);
+}
+
+void TestRepository::pruneFiredInstantsOlderThanIsExclusiveOfTheCutoff()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Boundary";
+    QVERIFY(source.insertProgram(program));
+
+    const QDateTime cutoff(QDate(2026, 6, 1), QTime(0, 0), QTimeZone::UTC);
+
+    FiredInstant atCutoff;
+    atCutoff.programId = program.id;
+    atCutoff.startTimeId = 41;
+    atCutoff.scheduledAtUtc = cutoff;
+    atCutoff.outcome = FiredInstant::Outcome::Ran;
+    QVERIFY(source.recordFiring(atCutoff));
+
+    FiredInstant beforeCutoff = atCutoff;
+    beforeCutoff.startTimeId = 42;
+    beforeCutoff.scheduledAtUtc = cutoff.addSecs(-1);
+    QVERIFY(source.recordFiring(beforeCutoff));
+
+    QVERIFY(source.pruneFiredInstantsOlderThan(cutoff));
+
+    QVERIFY(source.hasFired(atCutoff.programId, atCutoff.startTimeId, atCutoff.scheduledAtUtc));
+    QVERIFY(source.hasFired(beforeCutoff.programId, beforeCutoff.startTimeId, beforeCutoff.scheduledAtUtc) == false);
+}
+
+void TestRepository::deleteStartTimeRemovesOnlyThatRow()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Two starts";
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime keep;
+    keep.programId = program.id;
+    keep.minutesAfterMidnight = 300;
+    keep.timezone = "UTC";
+    QVERIFY(source.insertStartTime(keep));
+
+    ProgramStartTime remove;
+    remove.programId = program.id;
+    remove.minutesAfterMidnight = 600;
+    remove.timezone = "America/Denver";
+    QVERIFY(source.insertStartTime(remove));
+
+    QVERIFY(source.deleteStartTime(remove.id));
+
+    ProgramStartTimeList remaining = source.startTimesFor(program.id);
+    QCOMPARE(remaining.count(), 1);
+    QCOMPARE(remaining.first().id, keep.id);
+}
+
+void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program doomed;
+    doomed.name = "Doomed zones";
+    QVERIFY(source.insertProgram(doomed));
+
+    Program survivor;
+    survivor.name = "Survivor";
+    QVERIFY(source.insertProgram(survivor));
+
+    ProgramZone doomedZone;
+    doomedZone.programId = doomed.id;
+    doomedZone.zoneId = 3;
+    doomedZone.sequence = 1;
+    doomedZone.durationSeconds = 120;
+    QVERIFY(source.insertProgramZone(doomedZone));
+
+    ProgramZone survivorZone;
+    survivorZone.programId = survivor.id;
+    survivorZone.zoneId = 4;
+    survivorZone.sequence = 1;
+    survivorZone.durationSeconds = 240;
+    QVERIFY(source.insertProgramZone(survivorZone));
+
+    QVERIFY(source.deleteProgramZones(doomed.id));
+
+    QCOMPARE(source.zonesFor(doomed.id).count(), 0);
+    QCOMPARE(source.zonesFor(survivor.id).count(), 1);
+}
+
+void TestRepository::isMasterEnabledOnlyExactZeroDisables_data()
+{
+    QTest::addColumn<QString>("storedValue");
+    QTest::addColumn<bool>("expectEnabled");
+
+    QTest::newRow("exact zero disables") << QString("0") << false;
+    QTest::newRow("explicit one enables") << QString("1") << true;
+    QTest::newRow("empty string enables") << QString("") << true;
+    QTest::newRow("the word false enables") << QString("false") << true;
+}
+
+void TestRepository::isMasterEnabledOnlyExactZeroDisables()
+{
+    QFETCH(QString, storedValue);
+    QFETCH(bool, expectEnabled);
+
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(source.setSettingValue("master_enabled", storedValue));
+
+    QCOMPARE(source.isMasterEnabled(), expectEnabled);
+}
+
+void TestRepository::isMasterEnabledDefaultsToEnabledWhenAbsent()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    bool ok = false;
+    source.rawQuery("DELETE FROM settings WHERE key = 'master_enabled'", &ok);
+    QVERIFY(ok);
+
+    QVERIFY(source.isMasterEnabled());
 }
 
 QTEST_MAIN(TestRepository)
