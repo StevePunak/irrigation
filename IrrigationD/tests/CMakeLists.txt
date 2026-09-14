@@ -44,6 +44,11 @@ irrigation_add_test(tst_zonecontroller
     ../src/zonecontroller.cpp
 )
 
+irrigation_add_test(tst_stopbutton
+    tst_stopbutton.cpp
+    ../src/stopbutton.cpp
+)
+
 irrigation_add_test(tst_programrunner
     tst_programrunner.cpp
     ../src/programrunner.cpp
