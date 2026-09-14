@@ -69,9 +69,10 @@ private slots:
     void missedOccurrenceIsRecordedAndNeverCaughtUp();
     void rainDelaySuppressesFiring();
     void expiredRainDelayNoLongerSuppressesFiring();
+    void rainDelayEndingBeforeTheInstantStillFires();
     void graceWindowCrossesLocalMidnight();
-    void graceWindowCrossesLocalMidnightAheadOfUtc();
-    void graceWindowCrossesLocalMidnightBehindUtc();
+    void tickUsesTheZoneLocalDateAheadOfUtc();
+    void tickUsesTheZoneLocalDateBehindUtc();
     void unrecognisedZoneRecordsMissedInstant();
     void springForwardGapRecordsSlidMissedInstant();
     void outOfRangeMinutesNeverReachesTheDatabase();
@@ -178,7 +179,6 @@ void TestScheduler::fallBackRepeatPicksTheEarlierOffset()
 
     const QDateTime earlierOffset(QDate(2026, 11, 1), QTime(8, 30), QTimeZone::UTC);
     const QDateTime laterOffset(QDate(2026, 11, 1), QTime(9, 30), QTimeZone::UTC);
-    QVERIFY(earlierOffset < laterOffset);
     QCOMPARE(resolved, earlierOffset);
 
     QTemporaryDir dir;
@@ -228,8 +228,7 @@ void TestScheduler::fallBackRepeatInANegativeDstZonePicksTheEarlierOffset()
 {
     // Europe/Dublin models winter as its daylight-saving period: legal standard time is
     // IST (UTC+1) and winter clock is a negative offset from it. 2026-10-25 01:30 happens
-    // twice, at 00:30Z and 01:30Z; PreferDaylightSaving would pick the LATER of the two here,
-    // the opposite of what it picks in a positive-DST zone like America/Los_Angeles.
+    // twice, at 00:30Z and 01:30Z.
     ProgramStartTime startTime;
     startTime.minutesAfterMidnight = 90;
     startTime.timezone = "Europe/Dublin";
@@ -239,8 +238,6 @@ void TestScheduler::fallBackRepeatInANegativeDstZonePicksTheEarlierOffset()
     QVERIFY(valid);
 
     const QDateTime earlierOffset(QDate(2026, 10, 25), QTime(0, 30), QTimeZone::UTC);
-    const QDateTime laterOffset(QDate(2026, 10, 25), QTime(1, 30), QTimeZone::UTC);
-    QVERIFY(earlierOffset < laterOffset);
     QCOMPARE(resolved, earlierOffset);
 }
 
@@ -297,11 +294,15 @@ void TestScheduler::nextRunUtcFindsTheEarliestUpcomingStartTime()
     early.timezone = "UTC";
 
     ProgramStartTime late;
-    late.minutesAfterMidnight = 900;    // 15:00 UTC, still ahead of nowUtc today
+    late.minutesAfterMidnight = 900;    // 15:00 UTC, the true earliest upcoming instant
     late.timezone = "UTC";
 
-    // late is listed first: its instant is the true earliest of the two.
-    const ProgramStartTimeList startTimes = { late, early };
+    ProgramStartTime evening;
+    evening.minutesAfterMidnight = 1200;   // 20:00 UTC, also ahead of nowUtc today
+    evening.timezone = "UTC";
+
+    // late's instant, in the middle of the list, is the true earliest of the three.
+    const ProgramStartTimeList startTimes = { early, late, evening };
     const QDateTime nowUtc(QDate(2026, 9, 14), QTime(10, 0), QTimeZone::UTC);
 
     QCOMPARE(Scheduler::nextRunUtc(program, startTimes, nowUtc),
@@ -635,6 +636,41 @@ void TestScheduler::expiredRainDelayNoLongerSuppressesFiring()
     QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
 }
 
+void TestScheduler::rainDelayEndingBeforeTheInstantStillFires()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QVERIFY(source.setSettingValue("rain_delay_until", "2026-09-15T05:59:30Z"));
+    QVERIFY(offsetIdsSoProgramAndStartTimeDiffer(source));
+
+    Program program;
+    program.name = "Delay ends before due";
+    program.dayMode = Program::DayMode::Odd;
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStartTime startTime;
+    startTime.programId = program.id;
+    startTime.minutesAfterMidnight = 360;   // 06:00
+    startTime.timezone = "UTC";
+    QVERIFY(source.insertStartTime(startTime));
+
+    // Before the instant, while the delay is still in force.
+    TestClock clock(QDateTime(QDate(2026, 9, 15), QTime(5, 59, 0), QTimeZone::UTC));
+    Scheduler scheduler(&source, &clock);
+
+    QSignalSpy spy(&scheduler, &Scheduler::programDue);
+    scheduler.tick();
+    QCOMPARE(spy.count(), 0);
+    QCOMPARE(firedInstantCount(source, program.id, startTime.id), 0);
+
+    // Past the delay's end and onto the instant.
+    clock.setNowUtc(QDateTime(QDate(2026, 9, 15), QTime(6, 0, 10), QTimeZone::UTC));
+    scheduler.tick();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+}
+
 void TestScheduler::graceWindowCrossesLocalMidnight()
 {
     QTemporaryDir dir;
@@ -668,11 +704,10 @@ void TestScheduler::graceWindowCrossesLocalMidnight()
     QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
 }
 
-void TestScheduler::graceWindowCrossesLocalMidnightAheadOfUtc()
+void TestScheduler::tickUsesTheZoneLocalDateAheadOfUtc()
 {
     // Pacific/Auckland is NZST (UTC+12, no DST) in July. nowUtc's own calendar date (the
-    // 15th) is one day behind the zone's local date (the 16th) at this instant, so a "today"
-    // that skips the zone conversion would evaluate the 14th/15th instead of the 15th/16th.
+    // 15th) is one day behind the zone's local date (the 16th) at this instant.
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
@@ -703,11 +738,10 @@ void TestScheduler::graceWindowCrossesLocalMidnightAheadOfUtc()
     QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
 }
 
-void TestScheduler::graceWindowCrossesLocalMidnightBehindUtc()
+void TestScheduler::tickUsesTheZoneLocalDateBehindUtc()
 {
-    // America/Los_Angeles is PST (UTC-8, no DST) in January. The watering days are Saturday
-    // and Sunday only, so the 6th (Friday) is excluded and the 7th (Saturday) and 8th
-    // (Sunday) are the only candidates a "today" of either the 7th or the 8th can reach.
+    // America/Los_Angeles is PST (UTC-8, no DST) on 2026-03-07. The watering days are
+    // Saturday and Sunday only, so the 6th (Friday) is excluded.
     QTemporaryDir dir;
     IrrigationDataSource source(dir.filePath("irrigation.db"));
     QVERIFY(source.open());
@@ -736,8 +770,6 @@ void TestScheduler::graceWindowCrossesLocalMidnightBehindUtc()
     scheduler.tick();
     QCOMPARE(spy.count(), 0);
 
-    // A "today" taken from nowUtc's own date also reaches the 8th, recording an extra
-    // Missed row for its nonexistent 02:30 on top of the 7th's genuine one.
     QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
 }
 

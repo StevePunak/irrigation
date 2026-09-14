@@ -25,6 +25,7 @@ private slots:
     void pruneFiredInstantsOlderThanIsExclusiveOfTheCutoff();
     void deleteStartTimeRemovesOnlyThatRow();
     void startTimesForReportsSuccessInAscendingIdOrder();
+    void startTimesForReportsFailureWhenTheReadFails();
     void deleteProgramZonesLeavesOtherProgramsIntact();
     void isMasterEnabledOnlyExactZeroDisables_data();
     void isMasterEnabledOnlyExactZeroDisables();
@@ -515,6 +516,26 @@ void TestRepository::startTimesForReportsSuccessInAscendingIdOrder()
     QCOMPARE(startTimes.at(1).id, secondInserted.id);
 }
 
+void TestRepository::startTimesForReportsFailureWhenTheReadFails()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Doomed table";
+    QVERIFY(source.insertProgram(program));
+
+    bool dropOk = false;
+    source.rawQuery("DROP TABLE program_start_times", &dropOk);
+    QVERIFY(dropOk);
+
+    bool ok = true;
+    ProgramStartTimeList startTimes = source.startTimesFor(program.id, &ok);
+    QVERIFY(ok == false);
+    QVERIFY(startTimes.isEmpty());
+}
+
 void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
 {
     QTemporaryDir dir;
@@ -530,8 +551,7 @@ void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
     QVERIFY(source.insertProgram(survivor));
 
     // Two filler zones on the survivor push doomed's own zone rows past both program ids
-    // (1 and 2), so a WHERE clause that mistakenly compares a zone row's own id to the
-    // bound program id cannot accidentally look correct.
+    // (1 and 2).
     ProgramZone fillerZoneA;
     fillerZoneA.programId = survivor.id;
     fillerZoneA.zoneId = 1;
@@ -546,8 +566,6 @@ void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
     fillerZoneB.durationSeconds = 30;
     QVERIFY(source.insertProgramZone(fillerZoneB));
 
-    // doomed carries two zones: a single-zone program can be emptied by a mutation that
-    // deletes exactly one row by the wrong column.
     ProgramZone doomedZoneA;
     doomedZoneA.programId = doomed.id;
     doomedZoneA.zoneId = 3;
