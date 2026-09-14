@@ -315,6 +315,8 @@ private slots:
     void programPostRejectsAnUnknownSecondZoneId();
     void programPostAcceptsAZoneIdThatDiffersFromItsRenumberedZoneNumber();
     void programPostAnswers500WhenCommitFailsWritingNothing();
+    void programPostAnswers500WhenAZoneInsertFailsWritingNothing();
+    void programPostAnswers500WhenAStartTimeInsertFailsWritingNothing();
 
     void programPutUnknownIdReturns404();
     void programPutValidationRejectsAndPreservesEverything_data();
@@ -332,6 +334,8 @@ private slots:
     void programPutStoredDuplicateStartTimesShrinkToOneKeepingTheFirstId();
     void programPutAnswers500WhenCommitFailsLeavingOriginalDataIntact();
     void programPutAnswers500WhenAStartTimeInsertFailsLeavingOriginalDataIntact();
+    void programPutAnswers500WhenAZoneDeleteFailsLeavingZonesIntact();
+    void programPutAnswers500WhenTheFirstOfTwoStartTimeInsertsFails();
 
     void programsGetReportsEmptyNextRunUtcForADisabledProgram();
 
@@ -1719,6 +1723,114 @@ void TestControlServer::programPostAnswers500WhenCommitFailsWritingNothing()
     server.stop(TimeSpan::fromSeconds(5));
 }
 
+void TestControlServer::programPostAnswers500WhenAZoneInsertFailsWritingNothing()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    {
+        IrrigationDataSource trigger(dbPath);
+        QVERIFY(trigger.open());
+        bool ok = false;
+        trigger.rawQuery(
+            "CREATE TRIGGER reject_poison_zone_insert BEFORE INSERT ON program_zones "
+            "WHEN NEW.duration_seconds = 999999 "
+            "BEGIN SELECT RAISE(ABORT, 'poison zone insert'); END;",
+            &ok);
+        QVERIFY(ok);
+    }
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    const QJsonObject body{
+        { "name", "Poison" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 999999 } } } }
+    };
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/programs",
+                                    QJsonDocument(body).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(reply), 500);
+
+    // Read back on the server's own connection while it is still running.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    QCOMPARE(QJsonDocument::fromJson(getReply->readAll()).array().count(), 0);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        QCOMPARE(verify.allPrograms().count(), 0);
+    }
+
+    const QJsonObject validBody{
+        { "name", "Good" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = postJson(manager, server.boundPort(), "/admin/programs",
+                                          QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 201);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
+void TestControlServer::programPostAnswers500WhenAStartTimeInsertFailsWritingNothing()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    {
+        IrrigationDataSource trigger(dbPath);
+        QVERIFY(trigger.open());
+        bool ok = false;
+        trigger.rawQuery(
+            "CREATE TRIGGER reject_poison_start_time_insert BEFORE INSERT ON program_start_times "
+            "WHEN NEW.minutes_after_midnight = 1234 "
+            "BEGIN SELECT RAISE(ABORT, 'poison start time insert'); END;",
+            &ok);
+        QVERIFY(ok);
+    }
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    const QJsonObject body{
+        { "name", "Poison" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 1234 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/programs",
+                                    QJsonDocument(body).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(reply), 500);
+
+    // Read back on the server's own connection while it is still running.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    QCOMPARE(QJsonDocument::fromJson(getReply->readAll()).array().count(), 0);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        QCOMPARE(verify.allPrograms().count(), 0);
+    }
+
+    const QJsonObject validBody{
+        { "name", "Good" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = postJson(manager, server.boundPort(), "/admin/programs",
+                                          QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 201);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
 void TestControlServer::programPutUnknownIdReturns404()
 {
     QTemporaryDir dir;
@@ -2626,9 +2738,7 @@ void TestControlServer::programPutAnswers500WhenAStartTimeInsertFailsLeavingOrig
                                    QJsonDocument(body).toJson(QJsonDocument::Compact));
     QCOMPARE(statusCode(reply), 500);
 
-    // Read back on the server's own connection while it is still running: a handler that
-    // ignores reconcileStartTimes()'s failure would commit the delete with 200 and serve the
-    // program with its start time missing.
+    // Read back on the server's own connection while it is still running.
     QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
     const QJsonObject got = QJsonDocument::fromJson(getReply->readAll()).array().at(0).toObject();
     QCOMPARE(got.value("name").toString(), QString("Reconcile Fail"));
@@ -2651,6 +2761,166 @@ void TestControlServer::programPutAnswers500WhenAStartTimeInsertFailsLeavingOrig
         { "intervalDays", 0 }, { "anchorDate", "" },
         { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
         { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = putJson(manager, server.boundPort(),
+                                         QString("/admin/programs/%1").arg(program.id),
+                                         QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 200);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programPutAnswers500WhenAZoneDeleteFailsLeavingZonesIntact()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    Program program;
+    program.name = "ZoneDelete";
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 3;
+    ProgramStartTime original;
+    original.minutesAfterMidnight = 400;
+    original.timezone = "UTC";
+    QList<ProgramStartTime> startTimes{ original };
+    ProgramZone zone;
+    zone.zoneId = 8;
+    zone.sequence = 0;
+    zone.durationSeconds = 555;
+    QList<ProgramZone> zones{ zone };
+    QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
+    const int originalZoneEntryId = zones.at(0).id;
+
+    {
+        IrrigationDataSource trigger(dbPath);
+        QVERIFY(trigger.open());
+        bool ok = false;
+        trigger.rawQuery(
+            "CREATE TRIGGER reject_zone_delete BEFORE DELETE ON program_zones "
+            "WHEN OLD.duration_seconds = 555 "
+            "BEGIN SELECT RAISE(ABORT, 'poison zone delete'); END;",
+            &ok);
+        QVERIFY(ok);
+    }
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    const QJsonObject body{
+        { "name", "ZoneDelete Attempt" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 222 } } } }
+    };
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = putJson(manager, server.boundPort(),
+                                   QString("/admin/programs/%1").arg(program.id),
+                                   QJsonDocument(body).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(reply), 500);
+
+    // Read back on the server's own connection while it is still running.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject got = QJsonDocument::fromJson(getReply->readAll()).array().at(0).toObject();
+    QCOMPARE(got.value("zones").toArray().count(), 1);
+    QCOMPARE(got.value("zones").toArray().at(0).toObject().value("id").toInt(), originalZoneEntryId);
+    QCOMPARE(got.value("zones").toArray().at(0).toObject().value("durationSeconds").toInt(), 555);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        const ProgramZoneList verifyZones = verify.zonesFor(program.id);
+        QCOMPARE(verifyZones.count(), 1);
+        QCOMPARE(verifyZones.at(0).id, originalZoneEntryId);
+        QCOMPARE(verifyZones.at(0).durationSeconds, 555);
+    }
+
+    // The still-standing poisoned zone would trip the same trigger on a second PUT to this
+    // program: the follow-up write goes to a fresh program instead.
+    const QJsonObject validBody{
+        { "name", "Elsewhere" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{ QJsonObject{ { "zoneId", 8 }, { "sequence", 0 }, { "durationSeconds", 111 } } } }
+    };
+    QNetworkReply* secondReply = postJson(manager, server.boundPort(), "/admin/programs",
+                                          QJsonDocument(validBody).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(secondReply), 201);
+
+    QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::programPutAnswers500WhenTheFirstOfTwoStartTimeInsertsFails()
+{
+    QTemporaryDir dir;
+    const QString dbPath = dir.filePath("irrigation.db");
+
+    Program program;
+    program.name = "TwoInserts";
+    program.dayMode = Program::DayMode::DaysOfWeek;
+    program.dowMask = 3;
+    ProgramStartTime original;
+    original.minutesAfterMidnight = 400;
+    original.timezone = "UTC";
+    QList<ProgramStartTime> startTimes{ original };
+    QList<ProgramZone> zones{};
+    QVERIFY(seedProgramDirect(dbPath, program, startTimes, zones));
+    const int originalStartTimeId = startTimes.at(0).id;
+
+    {
+        IrrigationDataSource trigger(dbPath);
+        QVERIFY(trigger.open());
+        bool ok = false;
+        trigger.rawQuery(
+            "CREATE TRIGGER reject_poison_start_time BEFORE INSERT ON program_start_times "
+            "WHEN NEW.minutes_after_midnight = 1234 "
+            "BEGIN SELECT RAISE(ABORT, 'poison start time insert'); END;",
+            &ok);
+        QVERIFY(ok);
+    }
+
+    IrrigationControlServer server(dbPath);
+    QVERIFY(startServerOnLoopback(server));
+
+    // Neither incoming start time matches the stored 400, so both are new inserts; the
+    // poisoned one is sent first, ahead of an entry that would insert cleanly.
+    const QJsonObject body{
+        { "name", "TwoInserts Attempt" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{
+            QJsonObject{ { "minutesAfterMidnight", 1234 }, { "timezone", "UTC" } },
+            QJsonObject{ { "minutesAfterMidnight", 500 }, { "timezone", "UTC" } }
+        } },
+        { "zones", QJsonArray{} }
+    };
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = putJson(manager, server.boundPort(),
+                                   QString("/admin/programs/%1").arg(program.id),
+                                   QJsonDocument(body).toJson(QJsonDocument::Compact));
+    QCOMPARE(statusCode(reply), 500);
+
+    // Read back on the server's own connection while it is still running.
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject got = QJsonDocument::fromJson(getReply->readAll()).array().at(0).toObject();
+    QCOMPARE(got.value("startTimes").toArray().count(), 1);
+    QCOMPARE(got.value("startTimes").toArray().at(0).toObject().value("id").toInt(), originalStartTimeId);
+    QCOMPARE(got.value("startTimes").toArray().at(0).toObject().value("minutesAfterMidnight").toInt(), 400);
+
+    {
+        IrrigationDataSource verify(dbPath);
+        QVERIFY(verify.open());
+        const ProgramStartTimeList verifyStartTimes = verify.startTimesFor(program.id);
+        QCOMPARE(verifyStartTimes.count(), 1);
+        QCOMPARE(verifyStartTimes.at(0).id, originalStartTimeId);
+        QCOMPARE(verifyStartTimes.at(0).minutesAfterMidnight, 400);
+    }
+
+    // This body reconciles onto the stored row, so it never inserts 1234 and does not trip
+    // the trigger.
+    const QJsonObject validBody{
+        { "name", "TwoInserts" }, { "enabled", true }, { "dayMode", "DaysOfWeek" }, { "dowMask", 3 },
+        { "intervalDays", 0 }, { "anchorDate", "" },
+        { "startTimes", QJsonArray{ QJsonObject{ { "minutesAfterMidnight", 400 }, { "timezone", "UTC" } } } },
+        { "zones", QJsonArray{} }
     };
     QNetworkReply* secondReply = putJson(manager, server.boundPort(),
                                          QString("/admin/programs/%1").arg(program.id),
