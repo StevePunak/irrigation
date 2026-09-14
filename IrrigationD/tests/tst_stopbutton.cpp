@@ -48,6 +48,7 @@ private slots:
     void pressEmitsPressedAndSetsHeld();
     void releaseAfterPressClearsHeldWithNoAdditionalEmit();
     void pressAgainAfterReleaseEmitsPressedTwice();
+    void secondPressWithoutReleaseEmitsPressedAgain();
     void releaseWhileNotHeldEmitsNothing();
     void alreadyHeldAtStartupIsReportedWithoutEmittingPressed();
     void beginFailsWhenTheLineCannotBeRequested();
@@ -120,6 +121,26 @@ void TestStopButton::pressAgainAfterReleaseEmitsPressedTwice()
     QSignalSpy spy(&button, &StopButton::pressed);
     backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
     backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Falling);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
+
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(button.isHeld(), true);
+}
+
+void TestStopButton::secondPressWithoutReleaseEmitsPressedAgain()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    StopButton button(&backend, STOP_OFFSET);
+    QVERIFY(button.begin());
+
+    QSignalSpy spy(&button, &StopButton::pressed);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(button.isHeld(), true);
+
     backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 2);

@@ -15,7 +15,8 @@ static bool writeRawIni(const QString& path, const QString& content)
     if(file.open(QIODevice::WriteOnly | QIODevice::Truncate) == false) {
         return false;
     }
-    bool ok = file.write(content.toUtf8()) >= 0;
+    QByteArray bytes = content.toUtf8();
+    bool ok = file.write(bytes) == bytes.size();
     file.close();
     return ok;
 }

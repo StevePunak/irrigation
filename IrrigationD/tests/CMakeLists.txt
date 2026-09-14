@@ -48,8 +48,9 @@ irrigation_add_test(tst_stopbutton
     tst_stopbutton.cpp
     ../src/stopbutton.cpp
 )
-# Poisons freed heap memory so a use-after-free (e.g. reading InputPin::errorText()
-# after deleting the pin) fails deterministically instead of reading stale-but-correct memory.
+# beginFailsWhenTheLineCannotBeRequested and beginFailsWhenTheStartingReadFails catch an
+# errorText() read from a deleted InputPin only under this glibc environment; the bare
+# binary and non-glibc hosts pass that defect.
 set_tests_properties(tst_stopbutton PROPERTIES
     ENVIRONMENT "MALLOC_PERTURB_=165;GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
 )
