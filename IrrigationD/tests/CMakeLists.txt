@@ -48,6 +48,11 @@ irrigation_add_test(tst_stopbutton
     tst_stopbutton.cpp
     ../src/stopbutton.cpp
 )
+# Poisons freed heap memory so a use-after-free (e.g. reading InputPin::errorText()
+# after deleting the pin) fails deterministically instead of reading stale-but-correct memory.
+set_tests_properties(tst_stopbutton PROPERTIES
+    ENVIRONMENT "MALLOC_PERTURB_=165;GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
+)
 
 irrigation_add_test(tst_programrunner
     tst_programrunner.cpp

@@ -5,6 +5,13 @@
 
 #include "stopbutton.h"
 
+namespace
+{
+// Off the production zone set {5,6,12,13,16,19,20,21} and off stopButtonOffset()'s
+// own default (25), so a StopButton that ignores its configured offset fails loudly.
+const quint32 STOP_OFFSET = 17;
+}
+
 class CountingBackend : public MockBackend
 {
 public:
@@ -55,12 +62,12 @@ void TestStopButton::requestUsesActiveLowPullUpBothEdgesAnd20msDebounce()
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin());
 
     Gpio::InputRequest request = backend.lastInputRequest();
     QCOMPARE(request.consumer, QString("irrigationd-stop"));
-    QCOMPARE(request.offsets, QList<quint32>({25}));
+    QCOMPARE(request.offsets, QList<quint32>({STOP_OFFSET}));
     QCOMPARE(request.activeLow, true);
     QCOMPARE(request.bias, Gpio::Bias::PullUp);
     QCOMPARE(request.edge, Gpio::Edge::Both);
@@ -73,11 +80,12 @@ void TestStopButton::pressEmitsPressedAndSetsHeld()
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin());
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(button.isHeld(), true);
@@ -88,12 +96,13 @@ void TestStopButton::releaseAfterPressClearsHeldWithNoAdditionalEmit()
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin());
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
-    backend.simulateEdge(25, Gpio::Edge::Falling);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Falling);
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(button.isHeld(), false);
@@ -104,13 +113,14 @@ void TestStopButton::pressAgainAfterReleaseEmitsPressedTwice()
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin());
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
-    backend.simulateEdge(25, Gpio::Edge::Falling);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Falling);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 2);
     QCOMPARE(button.isHeld(), true);
@@ -121,11 +131,12 @@ void TestStopButton::releaseWhileNotHeldEmitsNothing()
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin());
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Falling);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Falling);
 
     QCOMPARE(spy.count(), 0);
     QCOMPARE(button.isHeld(), false);
@@ -135,12 +146,13 @@ void TestStopButton::alreadyHeldAtStartupIsReportedWithoutEmittingPressed()
 {
     MockBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
-    backend.setLineValue(25, Gpio::Value::Active);
+    backend.setLineValue(STOP_OFFSET, Gpio::Value::Active);
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QSignalSpy spy(&button, &StopButton::pressed);
 
     QVERIFY(button.begin());
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QCOMPARE(button.isHeld(), true);
     QCOMPARE(spy.count(), 0);
@@ -150,7 +162,7 @@ void TestStopButton::beginFailsWhenTheLineCannotBeRequested()
 {
     MockBackend backend;
     // No chip opened.
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
 
     QVERIFY(button.begin() == false);
     QCOMPARE(button.isHeld(), false);
@@ -163,16 +175,17 @@ void TestStopButton::retryAfterFailedRequestSucceeds()
     QVERIFY(backend.openChipByLabel("mock"));
     backend.setFailNextRequest(true);
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin() == false);
     QCOMPARE(button.errorText(), QString("injected failure"));
     QCOMPARE(backend.requestCount, 1);
 
     QVERIFY(button.begin());
     QCOMPARE(backend.requestCount, 2);
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(button.isHeld(), true);
@@ -183,16 +196,17 @@ void TestStopButton::secondBeginAfterSuccessIsRefusedWithoutAllocating()
     CountingBackend backend;
     QVERIFY(backend.openChipByLabel("mock"));
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin());
     QCOMPARE(backend.requestCount, 1);
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QVERIFY(button.begin() == false);
     QCOMPARE(backend.requestCount, 1);
     QCOMPARE(button.errorText(), QString("The stop button line is already requested"));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(button.isHeld(), true);
@@ -204,14 +218,14 @@ void TestStopButton::beginFailsWhenTheStartingReadFails()
     QVERIFY(backend.openChipByLabel("mock"));
     backend.failNextRead = true;
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QSignalSpy spy(&button, &StopButton::pressed);
 
     QVERIFY(button.begin() == false);
     QCOMPARE(button.errorText(), QString("injected read failure"));
     QCOMPARE(button.isHeld(), false);
 
-    backend.simulateEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
     QCOMPARE(spy.count(), 0);
 }
 
@@ -221,13 +235,14 @@ void TestStopButton::retryAfterFailedStartingReadSucceeds()
     QVERIFY(backend.openChipByLabel("mock"));
     backend.failNextRead = true;
 
-    StopButton button(&backend, 25);
+    StopButton button(&backend, STOP_OFFSET);
     QVERIFY(button.begin() == false);
 
     QVERIFY(button.begin());
+    QCOMPARE(backend.lastInputRequest().offsets, QList<quint32>({STOP_OFFSET}));
 
     QSignalSpy spy(&button, &StopButton::pressed);
-    backend.simulateEdge(25, Gpio::Edge::Rising);
+    backend.simulateEdge(STOP_OFFSET, Gpio::Edge::Rising);
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(button.isHeld(), true);
