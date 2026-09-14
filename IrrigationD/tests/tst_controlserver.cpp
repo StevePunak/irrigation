@@ -342,7 +342,7 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
     status.masterEnabled = true;
     status.stopHeld = false;
 
-    // updateStatus() is called from THIS (test) thread, not the server's worker thread.
+    // updateStatus() here runs on the test thread; delivery to the worker thread is asynchronous.
     server.updateStatus(status);
 
     QNetworkAccessManager manager;
@@ -400,8 +400,8 @@ void TestControlServer::zonePutKeysOnZoneNumberNotZoneId()
     {
         IrrigationDataSource seed(dbPath);
         QVERIFY(seed.open());
-        // Breaks the id == number coincidence the schema seeds, so a lookup keyed on
-        // id rather than number lands on a different row (or none).
+        // Breaks the id == number coincidence the schema seeds: once they diverge, a
+        // lookup keyed on id lands on a different row (or none).
         bool renumbered = false;
         seed.rawQuery("UPDATE zones SET number = 99 WHERE id = 1", &renumbered);
         QVERIFY(renumbered);
