@@ -10,6 +10,14 @@ if (container === null) {
   throw new Error('index.html is missing #root')
 }
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((error: unknown) => {
+      console.error('Service worker registration failed:', error)
+    })
+  })
+}
+
 createRoot(container).render(
   <StrictMode>
     <App />
