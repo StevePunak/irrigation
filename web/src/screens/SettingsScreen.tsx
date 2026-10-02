@@ -3,6 +3,8 @@ import { getSettings, getZones, putSettings, putZone } from '../api/client'
 import type { SettingsMap, Zone } from '../api/types'
 import {
   DEFAULT_MAX_ZONE_SECONDS,
+  DEFAULT_MAX_CONCURRENT_ZONES,
+  MAX_CONCURRENT_ZONES_LIMIT,
   SETTING_KEYS,
   parseInstant,
   parseInteger,
@@ -19,6 +21,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
   const [zones, setZones] = useState<Zone[]>([])
   const [names, setNames] = useState<Record<number, string>>({})
   const [ceilingMinutes, setCeilingMinutes] = useState(DEFAULT_MAX_ZONE_SECONDS / 60)
+  const [maxZones, setMaxZones] = useState(DEFAULT_MAX_CONCURRENT_ZONES)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -30,6 +33,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
       setCeilingMinutes(
         Math.round(parseInteger(loadedSettings[SETTING_KEYS.maxZoneSeconds], DEFAULT_MAX_ZONE_SECONDS) / 60),
       )
+      setMaxZones(parseInteger(loadedSettings[SETTING_KEYS.maxConcurrentZones], DEFAULT_MAX_CONCURRENT_ZONES))
       setError(null)
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -65,6 +69,14 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
     }
     void write({ [SETTING_KEYS.maxZoneSeconds]: String(ceilingMinutes * 60) })
   }, [ceilingMinutes, write])
+
+  const onSaveMaxZones = useCallback(() => {
+    if (Number.isInteger(maxZones) === false || maxZones < 1 || maxZones > MAX_CONCURRENT_ZONES_LIMIT) {
+      setError(`Max zones at once must be a whole number from 1 to ${MAX_CONCURRENT_ZONES_LIMIT}.`)
+      return
+    }
+    void write({ [SETTING_KEYS.maxConcurrentZones]: String(maxZones) })
+  }, [maxZones, write])
 
   const onRename = useCallback(
     async (zone: Zone) => {
@@ -119,6 +131,22 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
           </label>
           <button type="button" onClick={onSaveCeiling}>
             Save ceiling
+          </button>
+
+          <label>
+            Max zones at once
+            <input
+              type="number"
+              min={1}
+              max={MAX_CONCURRENT_ZONES_LIMIT}
+              value={maxZones}
+              onChange={(event) => {
+                setMaxZones(Number(event.target.value))
+              }}
+            />
+          </label>
+          <button type="button" onClick={onSaveMaxZones}>
+            Save max zones
           </button>
 
           <h2>Rain delay</h2>
