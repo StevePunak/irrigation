@@ -15,10 +15,12 @@ CREATE TABLE program_step_zones (
 );
 
 INSERT INTO program_steps (id, program_id, sequence, duration_seconds)
-    SELECT id, program_id, sequence, duration_seconds FROM program_zones;
+    SELECT id, program_id, sequence, duration_seconds FROM program_zones
+    WHERE program_id IN (SELECT id FROM programs) AND zone_id IN (SELECT id FROM zones);
 
 INSERT INTO program_step_zones (step_id, zone_id)
-    SELECT id, zone_id FROM program_zones ORDER BY id;
+    SELECT id, zone_id FROM program_zones
+    WHERE id IN (SELECT id FROM program_steps) ORDER BY id;
 
 DROP TABLE program_zones;
 
