@@ -2,6 +2,7 @@
 #define ZONECONTROLLER_H
 
 #include <QDeadlineTimer>
+#include <QList>
 #include <QMap>
 #include <QObject>
 #include <QTimer>
@@ -13,16 +14,20 @@
 /**
  * @brief Sole owner of the valve outputs.
  *
- * Enforces four invariants regardless of caller:
- *  1. Mutual exclusion — opening a zone closes any open zone in the same write.
- *  2. No open without a deadline — there is no overload that opens indefinitely.
- *  3. Duration clamp — requests are clamped to the configured ceiling.
+ * Enforces five invariants regardless of caller:
+ *  1. Concurrency cap — an open that would put more than maxConcurrentZones() zones
+ *     open together fails. Every line change for one request goes out in one bank
+ *     write. Re-opening an open zone takes no slot and resets its deadline.
+ *  2. No open without a deadline — every open zone has its own single-shot close.
+ *  3. Duration clamp — each request is clamped to the configured ceiling.
  *  4. Watchdog — a periodic tick reads the lines back and closes the bank when a
- *     zone is open past its deadline, a line differs from the expected state, or
- *     the read-back fails. A trip latches a fault that refuses every openZone()
- *     until a later tick finds no zone open and reads back exactly the expected
- *     state. A zone whose close failed inside the trip holds the latch until a
- *     retried close lands.
+ *     zone is open past its deadline, the lines differ from the expected open set,
+ *     or the read-back fails. A trip latches a fault that refuses every openZone()
+ *     until a later tick finds no zone open and reads back exactly the expected set.
+ *     A zone whose close failed inside the trip holds the latch until a retried
+ *     close lands.
+ *  5. Count check — the watchdog also trips when more lines read back asserted than
+ *     the highest cap in force when the open zones were opened.
  *
  * @warning Every method must be called on the thread that owns this object.
  *          Other threads emit a request signal instead. Two threads writing the
@@ -33,6 +38,22 @@ class ZoneController : public QObject,
 {
     Q_OBJECT
 public:
+    /** @brief Why a zone closed. */
+    enum class CloseReason
+    {
+        Deadline,
+        Stopped,
+        AllOff,
+        Watchdog
+    };
+    Q_ENUM(CloseReason)
+
+    /** @brief The cap in force until setMaxConcurrentZones() is called. */
+    static constexpr int DefaultMaxConcurrentZones = 2;
+
+    /** @brief The highest cap setMaxConcurrentZones() accepts. */
+    static constexpr int MaxConcurrentZonesCeiling = 8;
+
     /**
      * @brief Constructs a controller over @p zoneGpioMap.
      * @param backend The GPIO backend. Must already have an open chip.
@@ -54,24 +75,40 @@ public:
     bool begin();
 
     /**
-     * @brief Opens @p zoneNumber for @p seconds, closing any open zone.
-     * @return True on success. False for an unknown zone, a non-positive duration,
-     *         a failed write, or while the watchdog fault latch is set.
+     * @brief Opens @p zoneNumber for @p seconds alongside the zones already open.
+     *
+     * Re-opening an open zone writes nothing, takes no slot, and sets its deadline to
+     * now plus the clamped duration.
+     * @return True on success. False for an unknown zone, a non-positive duration, no
+     *         free slot under the cap, a failed write, or while the watchdog fault latch is set.
      */
     bool openZone(int zoneNumber, int seconds);
 
     /**
-     * @brief Closes every zone. Callable from any component; always takes precedence.
+     * @brief Closes @p zoneNumber, reporting CloseReason::Stopped.
+     * @return True when the zone closed or was not open. False when the write failed;
+     *         the close is then retried on the zone's own timer.
+     */
+    bool closeZone(int zoneNumber);
+
+    /**
+     * @brief Closes every zone, reporting CloseReason::AllOff. Callable from any component; always takes precedence.
      * @return True when every line was driven inactive, or when the lines are not
-     *         requested, in which case nothing is written and the open zone is forgotten.
+     *         requested, in which case nothing is written and the open zones are forgotten.
      */
     bool allOff();
 
-    /** @brief Returns the open zone number, or zero when none is open. */
-    int openZoneNumber() const { return _openZone; }
+    /** @brief Returns the open zone numbers in ascending order. */
+    QList<int> openZoneNumbers() const { return _open.keys(); }
 
-    /** @brief Returns the seconds remaining on the open zone, or zero. */
-    int secondsRemaining() const;
+    /** @brief Returns whether @p zoneNumber is open. */
+    bool isOpen(int zoneNumber) const { return _open.contains(zoneNumber); }
+
+    /** @brief Returns whether openZone(@p zoneNumber) would fit under the cap: the zone is open already or fewer than the cap are open. */
+    bool hasSlotFor(int zoneNumber) const { return _open.contains(zoneNumber) || _open.count() < _maxConcurrentZones; }
+
+    /** @brief Returns the seconds remaining on @p zoneNumber, or zero when it is not open. */
+    int secondsRemaining(int zoneNumber) const;
 
     /** @brief Returns the ceiling the next openZone() clamps to, in seconds. */
     int maxZoneSeconds() const { return _maxZoneSeconds; }
@@ -83,20 +120,30 @@ public:
      */
     void setMaxZoneSeconds(int value);
 
+    /** @brief Returns how many zones may be open together. */
+    int maxConcurrentZones() const { return _maxConcurrentZones; }
+
+    /**
+     * @brief Sets how many zones may be open together, bounded to 1 through MaxConcurrentZonesCeiling.
+     *
+     * Lowering the cap closes nothing. It refuses new opens until the open count falls below it.
+     */
+    void setMaxConcurrentZones(int value);
+
     /** @brief Returns whether the watchdog fault latch is refusing openZone(). */
     bool isFaulted() const { return _faulted; }
 
-    /** @brief Sets how often the watchdog verifies line state against the deadline. */
+    /** @brief Sets how often the watchdog verifies line state against the deadlines. */
     void setWatchdogInterval(const TimeSpan& value);
 
-    /** @brief Stops the close timer without closing the zone. Test seam for the watchdog. */
-    void disableCloseTimerForTest() { _closeTimer.stop(); }
+    /** @brief Stops @p zoneNumber's close timer without closing the zone. Test seam for the watchdog. */
+    void disableCloseTimerForTest(int zoneNumber);
 
-    /** @brief Runs the close path immediately. Test seam. */
-    void expireCloseTimerForTest() { _closeTimer.stop(); onCloseTimer(); }
+    /** @brief Runs @p zoneNumber's close path immediately. Test seam. */
+    void expireCloseTimerForTest(int zoneNumber);
 
-    /** @brief Returns whether the close timer is currently armed. Test seam. */
-    bool closeTimerActiveForTest() const { return _closeTimer.isActive(); }
+    /** @brief Returns whether @p zoneNumber's close timer is armed. Test seam. */
+    bool closeTimerActiveForTest(int zoneNumber) const;
 
     /** @brief Runs one watchdog check immediately. Test seam. */
     void triggerWatchdogForTest() { onWatchdogTimer(); }
@@ -105,28 +152,39 @@ public:
     QString errorText() const { return _errorText; }
 
 signals:
-    /** @brief Emitted after @p zoneNumber has been driven active for @p seconds. */
+    /** @brief Emitted after @p zoneNumber has been driven active, or re-opened, for @p seconds. */
     void zoneOpened(int zoneNumber, int seconds);
 
-    /** @brief Emitted after @p zoneNumber has been driven inactive. */
-    void zoneClosed(int zoneNumber);
+    /** @brief Emitted after @p zoneNumber has been driven inactive, with the reason it closed. */
+    void zoneClosed(int zoneNumber, ZoneController::CloseReason reason);
 
     /**
      * @brief Emitted after the watchdog closed the bank.
      *
-     * The watchdog trips when @p zoneNumber is open past its deadline, when a line
-     * reads back different from the expected state, or when the read-back fails.
-     * @p zoneNumber is the zone that was open, or zero. Never emitted when the
-     * close inside the trip failed.
+     * The watchdog trips when a zone is open past its deadline, when the lines read
+     * back different from the expected open set, when more lines are asserted than the
+     * cap allows, or when the read-back fails. @p zoneNumbers holds the zones that were
+     * open, possibly none. Never emitted when the close inside the trip failed.
      */
-    void watchdogTripped(int zoneNumber);
+    void watchdogTripped(const QList<int>& zoneNumbers);
 
 private slots:
-    void onCloseTimer();
     void onWatchdogTimer();
 
 private:
-    bool writeExclusive(int zoneNumber);
+    class OpenZone
+    {
+    public:
+        QDeadlineTimer deadline;
+        int capAtOpen = 0;
+        CloseReason pendingReason = CloseReason::Deadline;
+    };
+
+    bool writeOpenSet(const QList<int>& zoneNumbers);
+    bool closeOne(int zoneNumber, CloseReason reason);
+    bool closeAll(CloseReason reason);
+    void startCloseTimer(int zoneNumber, const TimeSpan& delay);
+    void onCloseTimer(int zoneNumber);
     void tripWatchdog();
 
     static const TimeSpan RetryInterval;
@@ -136,11 +194,11 @@ private:
     QMap<int, quint32> _zoneGpioMap;
     int _hardMaxZoneSeconds = 3600;
     int _maxZoneSeconds = 3600;
+    int _maxConcurrentZones = DefaultMaxConcurrentZones;
     OutputBank* _bank = nullptr;
-    QTimer _closeTimer;
+    QMap<int, QTimer*> _closeTimers;
     QTimer _watchdogTimer;
-    int _openZone = 0;
-    QDeadlineTimer _deadline;
+    QMap<int, OpenZone> _open;
     bool _faulted = false;
     QString _errorText;
 };

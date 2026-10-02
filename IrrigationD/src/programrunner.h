@@ -43,7 +43,7 @@ public slots:
     void onZoneClosed(int zoneNumber);
 
     /** @brief Stops the running program when the controller's watchdog trips. */
-    void onWatchdogTripped(int zoneNumber);
+    void onWatchdogTripped();
 
 signals:
     /** @brief Emitted when @p programId starts. */

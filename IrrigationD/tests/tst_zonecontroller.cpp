@@ -77,7 +77,7 @@ void TestZoneController::beginDrivesEveryLineInactive()
 
     QVERIFY(controller.begin());
 
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     for(quint32 offset : eightZones().values()) {
         QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
@@ -119,7 +119,7 @@ void TestZoneController::durationIsClampedToTheCeiling()
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(1).toInt(), 120);
-    QCOMPARE(controller.secondsRemaining(), 119);
+    QCOMPARE(controller.secondsRemaining(controller.openZoneNumbers().value(0)), 119);
 }
 
 void TestZoneController::durationBelowOneIsRejected()
@@ -132,7 +132,7 @@ void TestZoneController::durationBelowOneIsRejected()
 
     QVERIFY(controller.openZone(1, 0) == false);
     QVERIFY(controller.openZone(1, -5) == false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestZoneController::zoneClosesWhenItsTimerExpires()
@@ -150,7 +150,7 @@ void TestZoneController::zoneClosesWhenItsTimerExpires()
 
     QVERIFY(closedSpy.wait(4000));
     QCOMPARE(closedSpy.first().at(0).toInt(), 6);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(19), Gpio::Value::Inactive);
     QCOMPARE(watchdogSpy.count(), 0);
 }
@@ -166,12 +166,12 @@ void TestZoneController::watchdogClosesAZonePastItsDeadline()
 
     QVERIFY(controller.openZone(3, 2));
 
-    controller.disableCloseTimerForTest();
+    controller.disableCloseTimerForTest(controller.openZoneNumbers().value(0));
 
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
     QVERIFY(spy.wait(5000));
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestZoneController::watchdogTripsOnWrongLineEnergised()
@@ -191,7 +191,7 @@ void TestZoneController::watchdogTripsOnWrongLineEnergised()
     QSignalSpy spy(&controller, &ZoneController::watchdogTripped);
     QVERIFY(spy.wait(5000));
     QCOMPARE(spy.first().at(0).toInt(), 7);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestZoneController::watchdogDoesNotReportSuccessWhenCloseFails()
@@ -211,7 +211,7 @@ void TestZoneController::watchdogDoesNotReportSuccessWhenCloseFails()
     controller.triggerWatchdogForTest();
 
     QCOMPARE(trippedSpy.count(), 0);
-    QCOMPARE(controller.openZoneNumber(), 8);
+    QCOMPARE(controller.openZoneNumbers().value(0), 8);
     QCOMPARE(backend.lineValue(12), Gpio::Value::Active);
     QCOMPARE(backend.lineValue(21), Gpio::Value::Active);
 }
@@ -230,8 +230,8 @@ void TestZoneController::allOffClosesEverything()
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(0).toInt(), 7);
-    QCOMPARE(controller.openZoneNumber(), 0);
-    QVERIFY(controller.closeTimerActiveForTest() == false);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
+    QVERIFY(controller.closeTimerActiveForTest(controller.openZoneNumbers().value(0)) == false);
     for(quint32 offset : eightZones().values()) {
         QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
@@ -247,7 +247,7 @@ void TestZoneController::unknownZoneNumberIsRejected()
 
     QVERIFY(controller.openZone(0, 60) == false);
     QVERIFY(controller.openZone(9, 60) == false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestZoneController::watchdogIsRunningEvenWhenBeginsInactiveWriteFails()
@@ -282,7 +282,7 @@ void TestZoneController::openZoneRefusedWhileFaultedThenAllowedAfterCleanReadBac
 
     QCOMPARE(trippedSpy.count(), 1);
     QVERIFY(controller.isFaulted());
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 
     QVERIFY(controller.openZone(6, 823) == false);
     QVERIFY(controller.errorText().contains("fault", Qt::CaseInsensitive));
@@ -293,7 +293,7 @@ void TestZoneController::openZoneRefusedWhileFaultedThenAllowedAfterCleanReadBac
 
     QVERIFY(controller.isFaulted() == false);
     QVERIFY(controller.openZone(6, 823));
-    QCOMPARE(controller.openZoneNumber(), 6);
+    QCOMPARE(controller.openZoneNumbers().value(0), 6);
 }
 
 void TestZoneController::mismatchTripAlsoLatchesAndBlocksOpen()
@@ -325,7 +325,7 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
     ZoneController controller(&backend, eightZones(), true, 3600);
     QVERIFY(controller.begin());
     QVERIFY(controller.openZone(5, 839));
-    controller.disableCloseTimerForTest();
+    controller.disableCloseTimerForTest(controller.openZoneNumbers().value(0));
 
     backend.setLineValue(16, Gpio::Value::Inactive);
     backend.setLineValue(6, Gpio::Value::Active);
@@ -336,8 +336,8 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
 
     QCOMPARE(trippedSpy.count(), 0);
     QVERIFY(controller.isFaulted());
-    QCOMPARE(controller.openZoneNumber(), 5);
-    QVERIFY(controller.closeTimerActiveForTest());
+    QCOMPARE(controller.openZoneNumbers().value(0), 5);
+    QVERIFY(controller.closeTimerActiveForTest(controller.openZoneNumbers().value(0)));
     QVERIFY(controller.openZone(1, 601) == false);
 
     backend.setLineValue(16, Gpio::Value::Active);
@@ -347,9 +347,9 @@ void TestZoneController::allOffFailingInsideTripLeavesLatchUntilRetriedCloseLand
     QVERIFY(controller.isFaulted());
     QVERIFY(controller.openZone(1, 601) == false);
 
-    controller.expireCloseTimerForTest();
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
 
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(16), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(6), Gpio::Value::Inactive);
     QVERIFY(controller.isFaulted());
@@ -370,19 +370,19 @@ void TestZoneController::closeRetriesAfterTwoConsecutiveWriteFailuresThenSucceed
     QSignalSpy closedSpy(&controller, &ZoneController::zoneClosed);
 
     backend.setFailNextSetValues(true);
-    controller.expireCloseTimerForTest();
-    QVERIFY(controller.closeTimerActiveForTest());
-    QCOMPARE(controller.openZoneNumber(), 3);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QVERIFY(controller.closeTimerActiveForTest(controller.openZoneNumbers().value(0)));
+    QCOMPARE(controller.openZoneNumbers().value(0), 3);
     QCOMPARE(backend.lineValue(12), Gpio::Value::Active);
 
     backend.setFailNextSetValues(true);
-    controller.expireCloseTimerForTest();
-    QVERIFY(controller.closeTimerActiveForTest());
-    QCOMPARE(controller.openZoneNumber(), 3);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QVERIFY(controller.closeTimerActiveForTest(controller.openZoneNumbers().value(0)));
+    QCOMPARE(controller.openZoneNumbers().value(0), 3);
 
-    controller.expireCloseTimerForTest();
-    QVERIFY(controller.closeTimerActiveForTest() == false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QVERIFY(controller.closeTimerActiveForTest(controller.openZoneNumbers().value(0)) == false);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
     QCOMPARE(closedSpy.count(), 1);
     QCOMPARE(closedSpy.first().at(0).toInt(), 3);
@@ -399,10 +399,10 @@ void TestZoneController::closeRetryLandsWithinTwoRetryIntervals()
     QVERIFY(controller.openZone(3, 811));
 
     backend.failWrites = 2;
-    controller.expireCloseTimerForTest();
-    QCOMPARE(controller.openZoneNumber(), 3);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QCOMPARE(controller.openZoneNumbers().value(0), 3);
 
-    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 2500);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumbers().value(0), 0, 2500);
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
 }
 
@@ -420,9 +420,9 @@ void TestZoneController::allOffRetryLandsWithinOneRetryInterval()
     backend.setLineValue(6, Gpio::Value::Active);
     backend.failWrites = 1;
     controller.triggerWatchdogForTest();
-    QCOMPARE(controller.openZoneNumber(), 5);
+    QCOMPARE(controller.openZoneNumbers().value(0), 5);
 
-    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumber(), 0, 1300);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.openZoneNumbers().value(0), 0, 1300);
 }
 
 void TestZoneController::latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanOne()
@@ -438,7 +438,7 @@ void TestZoneController::latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanO
     backend.failRead = true;
     controller.triggerWatchdogForTest();
     QVERIFY(controller.isFaulted());
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     backend.failRead = false;
 
     for(int i = 0; i < 3; i++) {
@@ -452,7 +452,7 @@ void TestZoneController::latchStaysSetAcrossRepeatedDirtyTicksAndClearsOnACleanO
 
     QVERIFY(controller.isFaulted() == false);
     QVERIFY(controller.openZone(6, 823));
-    QCOMPARE(controller.openZoneNumber(), 6);
+    QCOMPARE(controller.openZoneNumbers().value(0), 6);
 }
 
 void TestZoneController::latchStaysSetAcrossRepeatedFailedReadsAndClearsOnAMatchingOne()
@@ -471,7 +471,7 @@ void TestZoneController::latchStaysSetAcrossRepeatedFailedReadsAndClearsOnAMatch
     QCOMPARE(trippedSpy.count(), 1);
     QCOMPARE(trippedSpy.at(0).at(0).toInt(), 8);
     QVERIFY(controller.isFaulted());
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 
     for(int i = 0; i < 3; i++) {
         controller.triggerWatchdogForTest();
@@ -487,7 +487,7 @@ void TestZoneController::latchStaysSetAcrossRepeatedFailedReadsAndClearsOnAMatch
     QVERIFY(controller.isFaulted() == false);
     QCOMPARE(trippedSpy.count(), 4);
     QVERIFY(controller.openZone(7, 857));
-    QCOMPARE(controller.openZoneNumber(), 7);
+    QCOMPARE(controller.openZoneNumbers().value(0), 7);
 }
 
 void TestZoneController::watchdogTripsWhenTheOpenZonesLineDropsOut()
@@ -546,7 +546,7 @@ void TestZoneController::durationOfExactlyOneSecondIsAccepted()
     QVERIFY(controller.begin());
 
     QVERIFY(controller.openZone(4, 1));
-    QCOMPARE(controller.openZoneNumber(), 4);
+    QCOMPARE(controller.openZoneNumbers().value(0), 4);
 }
 
 QTEST_MAIN(TestZoneController)

@@ -1,7 +1,21 @@
 #include "zonecontroller.h"
 
+#include <QStringList>
+
 #include <chrono>
 #include <limits>
+
+namespace
+{
+    QString zoneListText(const QList<int>& zoneNumbers)
+    {
+        QStringList parts;
+        for(int zoneNumber : zoneNumbers) {
+            parts.append(QString::number(zoneNumber));
+        }
+        return parts.join(", ");
+    }
+}
 
 const TimeSpan ZoneController::RetryInterval           = TimeSpan::fromSeconds(1);
 const TimeSpan ZoneController::DefaultWatchdogInterval = TimeSpan::fromSeconds(1);
@@ -17,11 +31,21 @@ ZoneController::ZoneController(IGpioBackend* backend,
     _zoneGpioMap(zoneGpioMap),
     _hardMaxZoneSeconds(maxZoneSeconds),
     _maxZoneSeconds(maxZoneSeconds),
-    _bank(new OutputBank(backend, QStringLiteral("irrigationd-zones"), zoneGpioMap.values(), activeLow, this)),
-    _deadline(QDeadlineTimer::Forever)
+    _bank(new OutputBank(backend, QStringLiteral("irrigationd-zones"), zoneGpioMap.values(), activeLow, this))
 {
-    _closeTimer.setSingleShot(true);
-    connect(&_closeTimer, &QTimer::timeout, this, &ZoneController::onCloseTimer);
+    for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
+        const int zoneNumber = it.key();
+        QTimer* timer = new QTimer(this);
+        timer->setSingleShot(true);
+        // A coarse timer may fire after the zone's deadline, and the watchdog trips on
+        // any zone it finds past its deadline.
+        timer->setTimerType(Qt::PreciseTimer);
+        connect(timer, &QTimer::timeout, this, [this, zoneNumber]()
+        {
+            onCloseTimer(zoneNumber);
+        });
+        _closeTimers.insert(zoneNumber, timer);
+    }
 
     setWatchdogInterval(DefaultWatchdogInterval);
     connect(&_watchdogTimer, &QTimer::timeout, this, &ZoneController::onWatchdogTimer);
@@ -41,18 +65,18 @@ bool ZoneController::begin()
 
     _watchdogTimer.start();
 
-    if(writeExclusive(0) == false) {
+    if(writeOpenSet(QList<int>()) == false) {
         return false;
     }
 
     return true;
 }
 
-bool ZoneController::writeExclusive(int zoneNumber)
+bool ZoneController::writeOpenSet(const QList<int>& zoneNumbers)
 {
     QMap<quint32, bool> values;
     for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
-        values.insert(it.value(), it.key() == zoneNumber);
+        values.insert(it.value(), zoneNumbers.contains(it.key()));
     }
 
     if(_bank->setValues(values) == false) {
@@ -81,69 +105,107 @@ bool ZoneController::openZone(int zoneNumber, int seconds)
         return false;
     }
 
-    const int clamped = qMin(seconds, _maxZoneSeconds);
-    const int previous = _openZone;
-
-    if(writeExclusive(zoneNumber) == false) {
+    const bool reopen = _open.contains(zoneNumber);
+    if(reopen == false && _open.count() >= _maxConcurrentZones) {
+        _errorText = QString("Refused to open zone %1: %2 zones already running")
+                         .arg(zoneNumber).arg(_open.count());
         return false;
     }
 
-    const TimeSpan duration = TimeSpan::fromSeconds(clamped);
-    _openZone = zoneNumber;
-    _deadline = QDeadlineTimer(std::chrono::seconds(clamped));
-
-    const qint64 timerMilliseconds = qMin<qint64>(static_cast<qint64>(duration.totalMilliseconds()),
-                                                  std::numeric_limits<int>::max());
-    _closeTimer.setSingleShot(true);
-    _closeTimer.start(static_cast<int>(timerMilliseconds));
-
-    if(previous != 0 && previous != zoneNumber) {
-        emit zoneClosed(previous);
+    if(reopen == false) {
+        QList<int> next = _open.keys();
+        next.append(zoneNumber);
+        if(writeOpenSet(next) == false) {
+            return false;
+        }
     }
+
+    const int clamped = qMin(seconds, _maxZoneSeconds);
+    OpenZone& zone = _open[zoneNumber];
+    zone.deadline = QDeadlineTimer(std::chrono::seconds(clamped));
+    zone.capAtOpen = qMax(zone.capAtOpen, _maxConcurrentZones);
+    zone.pendingReason = CloseReason::Deadline;
+    startCloseTimer(zoneNumber, TimeSpan::fromSeconds(clamped));
+
     emit zoneOpened(zoneNumber, clamped);
 
     return true;
 }
 
+bool ZoneController::closeZone(int zoneNumber)
+{
+    return closeOne(zoneNumber, CloseReason::Stopped);
+}
+
 bool ZoneController::allOff()
 {
-    if(_bank->isRequested() == false) {
-        _closeTimer.stop();
-        _deadline = QDeadlineTimer(QDeadlineTimer::Forever);
-        if(_openZone != 0) {
-            const int zoneNumber = _openZone;
-            _openZone = 0;
-            emit zoneClosed(zoneNumber);
-        }
+    return closeAll(CloseReason::AllOff);
+}
+
+bool ZoneController::closeOne(int zoneNumber, CloseReason reason)
+{
+    if(_open.contains(zoneNumber) == false) {
         return true;
     }
 
-    const int zoneNumber = _openZone;
-    if(writeExclusive(0) == false) {
+    QList<int> remaining = _open.keys();
+    remaining.removeAll(zoneNumber);
+    if(_bank->isRequested() == true && writeOpenSet(remaining) == false) {
+        logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(_errorText));
+        _open[zoneNumber].pendingReason = reason;
+        startCloseTimer(zoneNumber, RetryInterval);
+        return false;
+    }
+
+    // The zone leaves _open before zoneClosed: a slot that opens a zone writes the bank
+    // from _open, and a zone still listed there is re-energised.
+    _closeTimers.value(zoneNumber)->stop();
+    _open.remove(zoneNumber);
+
+    emit zoneClosed(zoneNumber, reason);
+    return true;
+}
+
+bool ZoneController::closeAll(CloseReason reason)
+{
+    const QList<int> closing = _open.keys();
+
+    if(_bank->isRequested() == true && writeOpenSet(QList<int>()) == false) {
         logText(LVL_ERROR, QString("allOff failed: %1").arg(_errorText));
-        if(zoneNumber != 0) {
-            _closeTimer.start(static_cast<int>(RetryInterval.totalMilliseconds()));
+        for(int zoneNumber : closing) {
+            _open[zoneNumber].pendingReason = reason;
+            startCloseTimer(zoneNumber, RetryInterval);
         }
         return false;
     }
 
-    _closeTimer.stop();
-    _openZone = 0;
-    _deadline = QDeadlineTimer(QDeadlineTimer::Forever);
+    // Every closed zone leaves _open before the first zoneClosed: a slot that opens a
+    // zone writes the bank from _open, and a zone still listed there is re-energised.
+    for(int zoneNumber : closing) {
+        _closeTimers.value(zoneNumber)->stop();
+        _open.remove(zoneNumber);
+    }
 
-    if(zoneNumber != 0) {
-        emit zoneClosed(zoneNumber);
+    for(int zoneNumber : closing) {
+        emit zoneClosed(zoneNumber, reason);
     }
 
     return true;
 }
 
-int ZoneController::secondsRemaining() const
+void ZoneController::startCloseTimer(int zoneNumber, const TimeSpan& delay)
+{
+    const qint64 milliseconds = qMin<qint64>(static_cast<qint64>(delay.totalMilliseconds()),
+                                             std::numeric_limits<int>::max());
+    _closeTimers.value(zoneNumber)->start(static_cast<int>(milliseconds));
+}
+
+int ZoneController::secondsRemaining(int zoneNumber) const
 {
     int result = 0;
-    if(_openZone != 0 && _deadline.isForever() == false) {
-        const qint64 secondsLeft =
-            std::chrono::duration_cast<std::chrono::seconds>(_deadline.remainingTimeAsDuration()).count();
+    if(_open.contains(zoneNumber)) {
+        const qint64 secondsLeft = std::chrono::duration_cast<std::chrono::seconds>(
+                                       _open.value(zoneNumber).deadline.remainingTimeAsDuration()).count();
         result = secondsLeft > 0 ? static_cast<int>(secondsLeft) : 0;
     }
     return result;
@@ -154,29 +216,44 @@ void ZoneController::setMaxZoneSeconds(int value)
     _maxZoneSeconds = qMin(qMax(value, 1), _hardMaxZoneSeconds);
 }
 
+void ZoneController::setMaxConcurrentZones(int value)
+{
+    _maxConcurrentZones = qMin(qMax(value, 1), MaxConcurrentZonesCeiling);
+}
+
 void ZoneController::setWatchdogInterval(const TimeSpan& value)
 {
     const TimeSpan interval = TimeSpan::max(MinimumWatchdogInterval, value);
     _watchdogTimer.setInterval(static_cast<int>(interval.totalMilliseconds()));
 }
 
-void ZoneController::onCloseTimer()
+void ZoneController::disableCloseTimerForTest(int zoneNumber)
 {
-    if(_openZone == 0) {
+    QTimer* timer = _closeTimers.value(zoneNumber, nullptr);
+    if(timer != nullptr) {
+        timer->stop();
+    }
+}
+
+void ZoneController::expireCloseTimerForTest(int zoneNumber)
+{
+    disableCloseTimerForTest(zoneNumber);
+    onCloseTimer(zoneNumber);
+}
+
+bool ZoneController::closeTimerActiveForTest(int zoneNumber) const
+{
+    QTimer* timer = _closeTimers.value(zoneNumber, nullptr);
+    return timer != nullptr && timer->isActive();
+}
+
+void ZoneController::onCloseTimer(int zoneNumber)
+{
+    if(_open.contains(zoneNumber) == false) {
         return;
     }
 
-    const int zoneNumber = _openZone;
-    if(writeExclusive(0) == false) {
-        logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(_errorText));
-        _closeTimer.start(static_cast<int>(RetryInterval.totalMilliseconds()));
-        return;
-    }
-
-    _openZone = 0;
-    _deadline = QDeadlineTimer(QDeadlineTimer::Forever);
-
-    emit zoneClosed(zoneNumber);
+    closeOne(zoneNumber, _open.value(zoneNumber).pendingReason);
 }
 
 void ZoneController::onWatchdogTimer()
@@ -185,38 +262,54 @@ void ZoneController::onWatchdogTimer()
     if(_bank->readValues(actual) == false) {
         logText(LVL_ERROR, QString("Watchdog could not read the bank: %1").arg(_bank->errorText()));
         tripWatchdog();
+        return;
     }
-    else {
-        QMap<quint32, bool> expected;
-        for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
-            expected.insert(it.value(), it.key() == _openZone);
-        }
-        const bool mismatch = actual != expected;
 
-        const bool pastDeadline = _openZone != 0
-                                  && _deadline.isForever() == false
-                                  && _deadline.hasExpired();
+    QMap<quint32, bool> expected;
+    for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
+        expected.insert(it.value(), _open.contains(it.key()));
+    }
 
-        if(mismatch || pastDeadline) {
-            logText(LVL_ERROR, QString("Watchdog tripped: open zone %1").arg(_openZone));
-            tripWatchdog();
+    int asserted = 0;
+    for(bool value : actual) {
+        if(value == true) {
+            asserted++;
         }
-        else if(_faulted == true && _openZone == 0) {
-            _faulted = false;
-            logText(LVL_WARNING, "Watchdog read-back matches the expected line state; fault latch cleared");
+    }
+
+    int allowed = 0;
+    QList<int> late;
+    for(auto it = _open.constBegin(); it != _open.constEnd(); ++it) {
+        allowed = qMax(allowed, it.value().capAtOpen);
+        if(it.value().deadline.hasExpired()) {
+            late.append(it.key());
         }
+    }
+
+    const bool mismatch = actual != expected;
+    const bool overCount = asserted > allowed;
+
+    if(mismatch || overCount || late.isEmpty() == false) {
+        logText(LVL_ERROR, QString("Watchdog tripped: open zones [%1], past deadline [%2], %3 lines asserted, %4 allowed")
+                               .arg(zoneListText(_open.keys()), zoneListText(late))
+                               .arg(asserted).arg(allowed));
+        tripWatchdog();
+    }
+    else if(_faulted == true && _open.isEmpty()) {
+        _faulted = false;
+        logText(LVL_WARNING, "Watchdog read-back matches the expected line state; fault latch cleared");
     }
 }
 
 void ZoneController::tripWatchdog()
 {
-    const int trippedOn = _openZone;
+    const QList<int> trippedOn = _open.keys();
 
-    // _faulted must be set before allOff(): allOff() emits zoneClosed synchronously,
-    // and a ProgramRunner answers it by calling openZone() on its next zone.
+    // _faulted must be set before closeAll(): closeAll() emits zoneClosed synchronously,
+    // and a slot answering it may call openZone().
     _faulted = true;
 
-    if(allOff() == true) {
+    if(closeAll(CloseReason::Watchdog) == true) {
         emit watchdogTripped(trippedOn);
     }
     else {

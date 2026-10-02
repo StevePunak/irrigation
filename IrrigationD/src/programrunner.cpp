@@ -117,10 +117,8 @@ void ProgramRunner::onZoneClosed(int zoneNumber)
     advance();
 }
 
-void ProgramRunner::onWatchdogTripped(int zoneNumber)
+void ProgramRunner::onWatchdogTripped()
 {
-    Q_UNUSED(zoneNumber)
-
     if(_running == false) {
         return;
     }

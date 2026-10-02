@@ -209,9 +209,8 @@ void IrrigationDaemon::onProgramDue(int programId, int startTimeId, const QDateT
             logText(LVL_ERROR, QString("Failed to record program %1 as skipped").arg(programId));
         }
     }
-    else if(_programRunner->isRunning() || _zoneController->openZoneNumber() != 0) {
-        logText(LVL_WARNING, QString("Program %1 came due while zone %2 is busy")
-                                 .arg(programId).arg(_zoneController->openZoneNumber()));
+    else if(_programRunner->isRunning() || _zoneController->openZoneNumbers().isEmpty() == false) {
+        logText(LVL_WARNING, QString("Program %1 came due while zones are open").arg(programId));
         if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::SkippedBusy) == false) {
             logText(LVL_ERROR, QString("Failed to record program %1 as skipped").arg(programId));
         }
@@ -239,8 +238,6 @@ void IrrigationDaemon::onManualZoneRunRequested(int zoneNumber, int seconds)
         logText(LVL_WARNING, QString("Refused a manual run of zone %1: the zone is disabled or has no database row").arg(zoneNumber));
     }
     else {
-        // abort() precedes openZone(): openZone() closes the open zone, and the
-        // zoneClosed it emits advances a running program onto its next zone.
         _programRunner->abort();
 
         if(_zoneController->openZone(zoneNumber, seconds) == false) {
@@ -289,6 +286,13 @@ void IrrigationDaemon::applyRuntimeSettings()
     logText(LVL_INFO, QString("Zone ceiling is %1 seconds (database '%2', INI %3)")
                           .arg(_zoneController->maxZoneSeconds()).arg(storedCeiling).arg(iniCeiling));
 
+    const QString storedCap = _dataSource->settingValue("max_concurrent_zones");
+    bool parsedCap = false;
+    const int cap = storedCap.toInt(&parsedCap);
+    _zoneController->setMaxConcurrentZones(parsedCap == true ? cap : ZoneController::DefaultMaxConcurrentZones);
+    logText(LVL_INFO, QString("At most %1 zones open at once (database '%2')")
+                          .arg(_zoneController->maxConcurrentZones()).arg(storedCap));
+
     const QString levelName = _dataSource->settingValue("log_level");
     if(_verboseLogging == true) {
         logText(LVL_INFO, QString("Ignoring log_level '%1': --verbose was given").arg(levelName));
@@ -326,8 +330,8 @@ void IrrigationDaemon::publishStatus()
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
 
     ServerStatus status;
-    status.runningZone = _zoneController->openZoneNumber();
-    status.secondsRemaining = _zoneController->secondsRemaining();
+    status.runningZone = _zoneController->openZoneNumbers().value(0);
+    status.secondsRemaining = _zoneController->secondsRemaining(status.runningZone);
     status.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
     status.masterEnabled = _dataSource->isMasterEnabled();
     status.stopHeld = _stopButton->isHeld();

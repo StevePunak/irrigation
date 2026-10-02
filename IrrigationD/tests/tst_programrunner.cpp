@@ -180,18 +180,18 @@ void TestProgramRunner::walksZonesInSequenceOrder()
     QVERIFY(runner.startProgram(programId));
     QCOMPARE(started.count(), 1);
     QCOMPARE(started.first().at(0).toInt(), programId);
-    QCOMPARE(controller.openZoneNumber(), 7);
+    QCOMPARE(controller.openZoneNumbers().value(0), 7);
     QCOMPARE(opened.count(), 1);
     QCOMPARE(opened.at(0).at(0).toInt(), 7);
     QCOMPARE(opened.at(0).at(1).toInt(), 617);
 
-    controller.expireCloseTimerForTest();
-    QCOMPARE(controller.openZoneNumber(), 5);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QCOMPARE(controller.openZoneNumbers().value(0), 5);
     QCOMPARE(opened.at(1).at(0).toInt(), 5);
     QCOMPARE(opened.at(1).at(1).toInt(), 619);
 
-    controller.expireCloseTimerForTest();
-    QCOMPARE(controller.openZoneNumber(), 2);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QCOMPARE(controller.openZoneNumbers().value(0), 2);
     QCOMPARE(opened.at(2).at(0).toInt(), 2);
     QCOMPARE(opened.at(2).at(1).toInt(), 613);
 }
@@ -215,13 +215,13 @@ void TestProgramRunner::finishesAfterTheLastZone()
     QSignalSpy spy(&runner, &ProgramRunner::programFinished);
 
     QVERIFY(runner.startProgram(programId));
-    controller.expireCloseTimerForTest();
-    controller.expireCloseTimerForTest();
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
 
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestProgramRunner::abortStopsTheSequenceAndClosesTheValve()
@@ -241,13 +241,13 @@ void TestProgramRunner::abortStopsTheSequenceAndClosesTheValve()
 
     ProgramRunner runner(&controller, &source);
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 4);
+    QCOMPARE(controller.openZoneNumbers().value(0), 4);
 
     runner.abort();
 
     // abort()'s own reentrant zoneClosed must not open the next zone.
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     for(quint32 offset : eightZones().values()) {
         QCOMPARE(backend.lineValue(offset), Gpio::Value::Inactive);
     }
@@ -276,7 +276,7 @@ void TestProgramRunner::startingWhileRunningIsRejected()
     QVERIFY(runner.startProgram(second) == false);
 
     QCOMPARE(runner.runningProgramId(), first);
-    QCOMPARE(controller.openZoneNumber(), 2);
+    QCOMPARE(controller.openZoneNumbers().value(0), 2);
 }
 
 void TestProgramRunner::aProgramWithNoZonesFinishesImmediately()
@@ -301,7 +301,7 @@ void TestProgramRunner::aProgramWithNoZonesFinishesImmediately()
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestProgramRunner::openFailureMidSequenceAbortsTheProgram()
@@ -331,22 +331,22 @@ void TestProgramRunner::openFailureMidSequenceAbortsTheProgram()
     QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 2);
+    QCOMPARE(controller.openZoneNumbers().value(0), 2);
 
-    controller.expireCloseTimerForTest();
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
 
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
     QCOMPARE(runner.runningProgramId(), 0);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(7)), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(zoneOffsetFor(4)), Gpio::Value::Inactive);
 
     const int recoveryProgramId = buildProgram(source, { 4 }, { 683 });
     QVERIFY(recoveryProgramId > 0);
     QVERIFY(runner.startProgram(recoveryProgramId));
-    QCOMPARE(controller.openZoneNumber(), 4);
+    QCOMPARE(controller.openZoneNumbers().value(0), 4);
 }
 
 void TestProgramRunner::manuallyOpenedZoneDoesNotCascadeWhenDisplaced()
@@ -372,7 +372,7 @@ void TestProgramRunner::manuallyOpenedZoneDoesNotCascadeWhenDisplaced()
 
     QVERIFY(runner.startProgram(programId));
 
-    QCOMPARE(controller.openZoneNumber(), 3);
+    QCOMPARE(controller.openZoneNumbers().value(0), 3);
     QCOMPARE(runner.isRunning(), true);
     QCOMPARE(finished.count(), 0);
     QCOMPARE(aborted.count(), 0);
@@ -398,7 +398,7 @@ void TestProgramRunner::watchdogMismatchTripAbortsTheProgram()
     QSignalSpy finished(&runner, &ProgramRunner::programFinished);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 1);
+    QCOMPARE(controller.openZoneNumbers().value(0), 1);
 
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
     backend.history.clear();
@@ -413,7 +413,7 @@ void TestProgramRunner::watchdogMismatchTripAbortsTheProgram()
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(finished.count(), 0);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(1)), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(zoneOffsetFor(8)), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(zoneOffsetFor(5)), Gpio::Value::Inactive);
@@ -438,7 +438,7 @@ void TestProgramRunner::watchdogReadFailureTripAbortsTheProgram()
     QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 6);
+    QCOMPARE(controller.openZoneNumbers().value(0), 6);
 
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
     backend.history.clear();
@@ -450,7 +450,7 @@ void TestProgramRunner::watchdogReadFailureTripAbortsTheProgram()
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(2)), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(zoneOffsetFor(8)), Gpio::Value::Inactive);
 }
@@ -475,7 +475,7 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     QSignalSpy tripped(&controller, &ZoneController::watchdogTripped);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 4);
+    QCOMPARE(controller.openZoneNumbers().value(0), 4);
 
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
     backend.history.clear();
@@ -488,17 +488,17 @@ void TestProgramRunner::watchdogTripWhoseCloseFailsAbortsOnlyAfterTheRetryLands(
     QCOMPARE(tripped.count(), 0);
     QCOMPARE(aborted.count(), 0);
     QCOMPARE(runner.isRunning(), true);
-    QCOMPARE(controller.openZoneNumber(), 4);
-    QVERIFY(controller.closeTimerActiveForTest());
+    QCOMPARE(controller.openZoneNumbers().value(0), 4);
+    QVERIFY(controller.closeTimerActiveForTest(controller.openZoneNumbers().value(0)));
 
-    controller.expireCloseTimerForTest();
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
 
     QCOMPARE(opened.count(), 0);
     QVERIFY(backend.everWrittenActive(zoneOffsetFor(7)) == false);
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(1)), Gpio::Value::Inactive);
 }
 
@@ -523,8 +523,8 @@ void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinished()
         QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
 
         QVERIFY(runner.startProgram(programId));
-        controller.expireCloseTimerForTest();
-        QCOMPARE(controller.openZoneNumber(), 5);
+        controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+        QCOMPARE(controller.openZoneNumbers().value(0), 5);
 
         backend.setLineValue(zoneOffsetFor(5), Gpio::Value::Inactive);
         backend.setLineValue(zoneOffsetFor(2), Gpio::Value::Active);
@@ -534,7 +534,7 @@ void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinished()
         QCOMPARE(finished.first().at(0).toInt(), programId);
         QCOMPARE(aborted.count(), 0);
         QCOMPARE(runner.isRunning(), false);
-        QCOMPARE(controller.openZoneNumber(), 0);
+        QCOMPARE(controller.openZoneNumbers().value(0), 0);
     }
     {
         QTemporaryDir dir;
@@ -561,7 +561,7 @@ void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinished()
         QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
 
         QVERIFY(runner.startProgram(programId));
-        QCOMPARE(controller.openZoneNumber(), 3);
+        QCOMPARE(controller.openZoneNumbers().value(0), 3);
 
         backend.setLineValue(zoneOffsetFor(3), Gpio::Value::Inactive);
         backend.setLineValue(zoneOffsetFor(8), Gpio::Value::Active);
@@ -571,7 +571,7 @@ void TestProgramRunner::watchdogTripOnTheFinalZoneEmitsProgramFinished()
         QCOMPARE(finished.first().at(0).toInt(), programId);
         QCOMPARE(aborted.count(), 0);
         QCOMPARE(runner.isRunning(), false);
-        QCOMPARE(controller.openZoneNumber(), 0);
+        QCOMPARE(controller.openZoneNumbers().value(0), 0);
         QCOMPARE(backend.lineValue(zoneOffsetFor(6)), Gpio::Value::Inactive);
     }
 }
@@ -599,11 +599,11 @@ void TestProgramRunner::disabledZoneIsSkippedByARunningProgram()
     QSignalSpy finished(&runner, &ProgramRunner::programFinished);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 2);
+    QCOMPARE(controller.openZoneNumbers().value(0), 2);
 
-    controller.expireCloseTimerForTest();
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
 
-    QCOMPARE(controller.openZoneNumber(), 7);
+    QCOMPARE(controller.openZoneNumbers().value(0), 7);
     QCOMPARE(backend.lineValue(zoneOffsetFor(4)), Gpio::Value::Inactive);
     QCOMPARE(finished.count(), 0);
     QCOMPARE(runner.isRunning(), true);
@@ -639,7 +639,7 @@ void TestProgramRunner::programOfOnlyDisabledZonesFinishesImmediately()
     QCOMPARE(finished.count(), 1);
     QCOMPARE(finished.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(8)), Gpio::Value::Inactive);
     QCOMPARE(backend.lineValue(zoneOffsetFor(1)), Gpio::Value::Inactive);
 }
@@ -669,11 +669,11 @@ void TestProgramRunner::firstZoneOpenFailureReturnsFalseAndAbortsTheProgram()
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
     QCOMPARE(runner.runningProgramId(), 0);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
     QCOMPARE(backend.lineValue(zoneOffsetFor(6)), Gpio::Value::Inactive);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 6);
+    QCOMPARE(controller.openZoneNumbers().value(0), 6);
 }
 
 void TestProgramRunner::aRepeatedZoneNumberWatersEachOccurrenceSeparately()
@@ -695,17 +695,17 @@ void TestProgramRunner::aRepeatedZoneNumberWatersEachOccurrenceSeparately()
     QSignalSpy opened(&controller, &ZoneController::zoneOpened);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 3);
+    QCOMPARE(controller.openZoneNumbers().value(0), 3);
     QCOMPARE(opened.count(), 1);
     QCOMPARE(opened.at(0).at(1).toInt(), 883);
 
-    controller.expireCloseTimerForTest();
-    QCOMPARE(controller.openZoneNumber(), 3);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QCOMPARE(controller.openZoneNumbers().value(0), 3);
     QCOMPARE(opened.count(), 2);
     QCOMPARE(opened.at(1).at(1).toInt(), 887);
 
-    controller.expireCloseTimerForTest();
-    QCOMPARE(controller.openZoneNumber(), 5);
+    controller.expireCloseTimerForTest(controller.openZoneNumbers().value(0));
+    QCOMPARE(controller.openZoneNumbers().value(0), 5);
     QCOMPARE(opened.count(), 3);
     QCOMPARE(opened.at(2).at(1).toInt(), 907);
 }
@@ -729,14 +729,14 @@ void TestProgramRunner::watchdogTrippedSignalAbortsARunningProgram()
     QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
 
     QVERIFY(runner.startProgram(programId));
-    QCOMPARE(controller.openZoneNumber(), 4);
+    QCOMPARE(controller.openZoneNumbers().value(0), 4);
 
-    emit controller.watchdogTripped(4);
+    emit controller.watchdogTripped({ 4 });
 
     QCOMPARE(aborted.count(), 1);
     QCOMPARE(aborted.first().at(0).toInt(), programId);
     QCOMPARE(runner.isRunning(), false);
-    QCOMPARE(controller.openZoneNumber(), 0);
+    QCOMPARE(controller.openZoneNumbers().value(0), 0);
 }
 
 void TestProgramRunner::abortWhileIdleIsANoOp()
@@ -759,7 +759,7 @@ void TestProgramRunner::abortWhileIdleIsANoOp()
     runner.abort();
 
     QCOMPARE(aborted.count(), 0);
-    QCOMPARE(controller.openZoneNumber(), 2);
+    QCOMPARE(controller.openZoneNumbers().value(0), 2);
 }
 
 QTEST_MAIN(TestProgramRunner)
