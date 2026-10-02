@@ -61,7 +61,7 @@ public:
     static QDateTime nextRunUtc(const Program& program, const ProgramStartTimeList& startTimes, const QDateTime& nowUtc);
 
 signals:
-    /** @brief Emitted once a scheduled start time has come due and been recorded. */
+    /** @brief Emitted once a scheduled start time has come due and been recorded queued. Whoever handles it writes the final outcome. */
     void programDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
 
 private:

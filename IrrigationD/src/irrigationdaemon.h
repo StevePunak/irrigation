@@ -13,6 +13,7 @@ class IGpioBackend;
 class IrrigationControlServer;
 class IrrigationDataSource;
 class IrrigationSettings;
+class ProgramQueue;
 class ProgramRunner;
 class QTimer;
 class Scheduler;
@@ -104,6 +105,7 @@ private:
     StopButton* _stopButton = nullptr;
     IrrigationDataSource* _dataSource = nullptr;
     ProgramRunner* _programRunner = nullptr;
+    ProgramQueue* _programQueue = nullptr;
     Scheduler* _scheduler = nullptr;
     IrrigationControlServer* _controlServer = nullptr;
     QTimer* _statusTimer = nullptr;

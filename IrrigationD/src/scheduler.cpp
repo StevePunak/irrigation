@@ -204,7 +204,7 @@ void Scheduler::tick()
                     continue;
                 }
 
-                if(recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::Ran)) {
+                if(recordOnce(program.id, startTime.id, scheduledUtc, FiredInstant::Outcome::Queued)) {
                     emit programDue(program.id, startTime.id, scheduledUtc);
                 }
             }

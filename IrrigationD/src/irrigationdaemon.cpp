@@ -3,6 +3,7 @@
 #include "database/irrigationdatasource.h"
 #include "irrigationcontrolserver.h"
 #include "irrigationsettings.h"
+#include "programqueue.h"
 #include "programrunner.h"
 #include "scheduler.h"
 #include "stopbutton.h"
@@ -86,6 +87,8 @@ void IrrigationDaemon::threadStarted()
         applyRuntimeSettings();
 
         _programRunner = new ProgramRunner(_zoneController, _dataSource);
+        _programQueue = new ProgramQueue(_programRunner, _dataSource, &_clock);
+        _programQueue->recordRestartDrops();
         _scheduler = new Scheduler(_dataSource, &_clock);
 
         _controlServer = new IrrigationControlServer(_settings->databasePath());
@@ -126,6 +129,11 @@ void IrrigationDaemon::threadAboutToFinish()
 
     delete _statusTimer;
     _statusTimer = nullptr;
+
+    // The queue goes before the runner aborts: an aborted program starts the next queued
+    // one, and nothing may open a valve during teardown.
+    delete _programQueue;
+    _programQueue = nullptr;
 
     if(_programRunner != nullptr) {
         _programRunner->abort();
@@ -189,8 +197,8 @@ void IrrigationDaemon::onStopPressed()
 {
     logText(LVL_WARNING, "Stop requested");
 
-    // abort() precedes allOff(): allOff() emits zoneClosed, which advances a
-    // running program onto its next zone.
+    // dropAll() precedes abort(): an aborted program starts the next queued one.
+    _programQueue->dropAll(FiredInstant::Outcome::DroppedStop);
     _programRunner->abort();
 
     if(_zoneController->allOff() == false) {
@@ -209,18 +217,8 @@ void IrrigationDaemon::onProgramDue(int programId, int startTimeId, const QDateT
             logText(LVL_ERROR, QString("Failed to record program %1 as skipped").arg(programId));
         }
     }
-    else if(_programRunner->isRunning() || _zoneController->openZoneNumbers().isEmpty() == false) {
-        logText(LVL_WARNING, QString("Program %1 came due while zones are open").arg(programId));
-        if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::SkippedBusy) == false) {
-            logText(LVL_ERROR, QString("Failed to record program %1 as skipped").arg(programId));
-        }
-    }
-    else if(_programRunner->startProgram(programId) == false) {
-        logText(LVL_ERROR, QString("Failed to start program %1: %2")
-                               .arg(programId).arg(_zoneController->errorText()));
-        if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::Failed) == false) {
-            logText(LVL_ERROR, QString("Failed to record program %1 as failed").arg(programId));
-        }
+    else {
+        _programQueue->enqueueScheduled(programId, startTimeId, scheduledAtUtc);
     }
 
     publishStatus();
@@ -258,13 +256,10 @@ void IrrigationDaemon::onProgramRunRequested(int programId)
         logText(LVL_WARNING, QString("Refused a manual run of program %1: the master enable is off").arg(programId));
     }
     else {
-        // abort() precedes startProgram(): startProgram() refuses while a program
-        // is already running, so calling it before abort() drops the request.
-        _programRunner->abort();
-
-        if(_programRunner->startProgram(programId) == false) {
-            logText(LVL_ERROR, QString("Failed to start program %1: %2")
-                                   .arg(programId).arg(_zoneController->errorText()));
+        const RunRequest::Refusal refusal = _programQueue->enqueueManual(programId);
+        if(refusal != RunRequest::Refusal::None) {
+            logText(LVL_WARNING, QString("Refused a manual run of program %1: %2")
+                                     .arg(programId).arg(RunRequest::refusalToString(refusal)));
         }
 
         publishStatus();
