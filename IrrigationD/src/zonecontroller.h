@@ -21,13 +21,19 @@
  *  2. No open without a deadline — every open zone has its own single-shot close.
  *  3. Duration clamp — each request is clamped to the configured ceiling.
  *  4. Watchdog — a periodic tick reads the lines back and closes the bank when a
- *     zone is open past its deadline, the lines differ from the expected open set,
- *     or the read-back fails. A trip latches a fault that refuses every openZone()
- *     until a later tick finds no zone open and reads back exactly the expected set.
- *     A zone whose close failed inside the trip holds the latch until a retried
- *     close lands.
+ *     zone is open past its deadline with no close pending, the lines differ from
+ *     the expected open set, or the read-back fails. A zone found past its deadline
+ *     with its close timer still armed is closed on the spot. A trip latches a fault
+ *     that refuses every openZone() until a later tick finds no zone open and reads
+ *     back exactly the expected set. A zone whose close failed inside the trip holds
+ *     the latch until a retried close lands.
  *  5. Count check — the watchdog also trips when more lines read back asserted than
  *     the highest cap in force when the open zones were opened.
+ *
+ * A zone whose close write failed stays listed as open and is retried until the
+ * close lands. Every later write drives its line inactive, and openZone() refuses
+ * it. While a failed allOff() or watchdog close is pending, openZone() refuses
+ * every zone.
  *
  * @warning Every method must be called on the thread that owns this object.
  *          Other threads emit a request signal instead. Two threads writing the
@@ -41,10 +47,10 @@ public:
     /** @brief Why a zone closed. */
     enum class CloseReason
     {
-        Deadline,
-        Stopped,
-        AllOff,
-        Watchdog
+        Deadline,   ///< The zone's own close timer fired, or the watchdog found it due.
+        Stopped,    ///< closeZone() closed the zone.
+        AllOff,     ///< allOff() closed the zone with the rest of the bank.
+        Watchdog    ///< The watchdog closed the bank.
     };
     Q_ENUM(CloseReason)
 
@@ -80,7 +86,9 @@ public:
      * Re-opening an open zone writes nothing, takes no slot, and sets its deadline to
      * now plus the clamped duration.
      * @return True on success. False for an unknown zone, a non-positive duration, no
-     *         free slot under the cap, a failed write, or while the watchdog fault latch is set.
+     *         free slot under the cap, a zone whose close is pending, a failed write,
+     *         while a failed allOff() or watchdog close is pending, or while the
+     *         watchdog fault latch is set.
      */
     bool openZone(int zoneNumber, int seconds);
 
@@ -95,6 +103,7 @@ public:
      * @brief Closes every zone, reporting CloseReason::AllOff. Callable from any component; always takes precedence.
      * @return True when every line was driven inactive, or when the lines are not
      *         requested, in which case nothing is written and the open zones are forgotten.
+     *         False when the write failed; the whole bank is then retried in one write.
      */
     bool allOff();
 
@@ -139,10 +148,10 @@ public:
     /** @brief Stops @p zoneNumber's close timer without closing the zone. Test seam for the watchdog. */
     void disableCloseTimerForTest(int zoneNumber);
 
-    /** @brief Runs @p zoneNumber's close path immediately. Test seam. */
+    /** @brief Runs @p zoneNumber's close path immediately, or the pending whole-bank retry that covers it. Test seam. */
     void expireCloseTimerForTest(int zoneNumber);
 
-    /** @brief Returns whether @p zoneNumber's close timer is armed. Test seam. */
+    /** @brief Returns whether @p zoneNumber's close timer, or a whole-bank retry that covers it, is armed. Test seam. */
     bool closeTimerActiveForTest(int zoneNumber) const;
 
     /** @brief Runs one watchdog check immediately. Test seam. */
@@ -178,13 +187,16 @@ private:
         QDeadlineTimer deadline;
         int capAtOpen = 0;
         CloseReason pendingReason = CloseReason::Deadline;
+        bool closing = false;
     };
 
+    QList<int> activeZoneNumbers() const;
     bool writeOpenSet(const QList<int>& zoneNumbers);
     bool closeOne(int zoneNumber, CloseReason reason);
     bool closeAll(CloseReason reason);
     void startCloseTimer(int zoneNumber, const TimeSpan& delay);
     void onCloseTimer(int zoneNumber);
+    void onBankRetryTimer();
     void tripWatchdog();
 
     static const TimeSpan RetryInterval;
@@ -198,7 +210,10 @@ private:
     OutputBank* _bank = nullptr;
     QMap<int, QTimer*> _closeTimers;
     QTimer _watchdogTimer;
+    QTimer _bankRetryTimer;
     QMap<int, OpenZone> _open;
+    bool _bankClosePending = false;
+    CloseReason _bankCloseReason = CloseReason::AllOff;
     bool _faulted = false;
     QString _errorText;
 };

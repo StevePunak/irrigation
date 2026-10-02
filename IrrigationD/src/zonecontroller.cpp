@@ -37,8 +37,6 @@ ZoneController::ZoneController(IGpioBackend* backend,
         const int zoneNumber = it.key();
         QTimer* timer = new QTimer(this);
         timer->setSingleShot(true);
-        // A coarse timer may fire after the zone's deadline, and the watchdog trips on
-        // any zone it finds past its deadline.
         timer->setTimerType(Qt::PreciseTimer);
         connect(timer, &QTimer::timeout, this, [this, zoneNumber]()
         {
@@ -46,6 +44,10 @@ ZoneController::ZoneController(IGpioBackend* backend,
         });
         _closeTimers.insert(zoneNumber, timer);
     }
+
+    _bankRetryTimer.setSingleShot(true);
+    _bankRetryTimer.setInterval(static_cast<int>(RetryInterval.totalMilliseconds()));
+    connect(&_bankRetryTimer, &QTimer::timeout, this, &ZoneController::onBankRetryTimer);
 
     setWatchdogInterval(DefaultWatchdogInterval);
     connect(&_watchdogTimer, &QTimer::timeout, this, &ZoneController::onWatchdogTimer);
@@ -72,6 +74,17 @@ bool ZoneController::begin()
     return true;
 }
 
+QList<int> ZoneController::activeZoneNumbers() const
+{
+    QList<int> result;
+    for(auto it = _open.constBegin(); it != _open.constEnd(); ++it) {
+        if(it.value().closing == false) {
+            result.append(it.key());
+        }
+    }
+    return result;
+}
+
 bool ZoneController::writeOpenSet(const QList<int>& zoneNumbers)
 {
     QMap<quint32, bool> values;
@@ -95,8 +108,18 @@ bool ZoneController::openZone(int zoneNumber, int seconds)
         return false;
     }
 
+    if(_bankClosePending == true) {
+        _errorText = QString("Refused to open zone %1: closing every zone is pending a retry").arg(zoneNumber);
+        return false;
+    }
+
     if(_zoneGpioMap.contains(zoneNumber) == false) {
         _errorText = QString("Unknown zone %1").arg(zoneNumber);
+        return false;
+    }
+
+    if(_open.contains(zoneNumber) == true && _open.value(zoneNumber).closing == true) {
+        _errorText = QString("Refused to open zone %1: its close is pending a retry").arg(zoneNumber);
         return false;
     }
 
@@ -113,7 +136,7 @@ bool ZoneController::openZone(int zoneNumber, int seconds)
     }
 
     if(reopen == false) {
-        QList<int> next = _open.keys();
+        QList<int> next = activeZoneNumbers();
         next.append(zoneNumber);
         if(writeOpenSet(next) == false) {
             return false;
@@ -148,19 +171,25 @@ bool ZoneController::closeOne(int zoneNumber, CloseReason reason)
         return true;
     }
 
-    QList<int> remaining = _open.keys();
+    QList<int> remaining = activeZoneNumbers();
     remaining.removeAll(zoneNumber);
     if(_bank->isRequested() == true && writeOpenSet(remaining) == false) {
         logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(_errorText));
-        _open[zoneNumber].pendingReason = reason;
+        OpenZone& zone = _open[zoneNumber];
+        zone.closing = true;
+        zone.pendingReason = reason;
         startCloseTimer(zoneNumber, RetryInterval);
         return false;
     }
 
     // The zone leaves _open before zoneClosed: a slot that opens a zone writes the bank
-    // from _open, and a zone still listed there is re-energised.
+    // from the active zones in _open, and a zone still listed there as active is re-energised.
     _closeTimers.value(zoneNumber)->stop();
     _open.remove(zoneNumber);
+    if(_open.isEmpty() == true) {
+        _bankRetryTimer.stop();
+        _bankClosePending = false;
+    }
 
     emit zoneClosed(zoneNumber, reason);
     return true;
@@ -172,12 +201,22 @@ bool ZoneController::closeAll(CloseReason reason)
 
     if(_bank->isRequested() == true && writeOpenSet(QList<int>()) == false) {
         logText(LVL_ERROR, QString("allOff failed: %1").arg(_errorText));
-        for(int zoneNumber : closing) {
-            _open[zoneNumber].pendingReason = reason;
-            startCloseTimer(zoneNumber, RetryInterval);
+        if(closing.isEmpty() == false) {
+            for(int zoneNumber : closing) {
+                OpenZone& zone = _open[zoneNumber];
+                zone.closing = true;
+                zone.pendingReason = reason;
+                _closeTimers.value(zoneNumber)->stop();
+            }
+            _bankClosePending = true;
+            _bankCloseReason = reason;
+            _bankRetryTimer.start();
         }
         return false;
     }
+
+    _bankRetryTimer.stop();
+    _bankClosePending = false;
 
     // Every closed zone leaves _open before the first zoneClosed: a slot that opens a
     // zone writes the bank from _open, and a zone still listed there is re-energised.
@@ -238,13 +277,22 @@ void ZoneController::disableCloseTimerForTest(int zoneNumber)
 void ZoneController::expireCloseTimerForTest(int zoneNumber)
 {
     disableCloseTimerForTest(zoneNumber);
-    onCloseTimer(zoneNumber);
+    if(_bankClosePending == true && _open.contains(zoneNumber) == true) {
+        _bankRetryTimer.stop();
+        onBankRetryTimer();
+    }
+    else {
+        onCloseTimer(zoneNumber);
+    }
 }
 
 bool ZoneController::closeTimerActiveForTest(int zoneNumber) const
 {
     QTimer* timer = _closeTimers.value(zoneNumber, nullptr);
-    return timer != nullptr && timer->isActive();
+    if(timer != nullptr && timer->isActive()) {
+        return true;
+    }
+    return _bankRetryTimer.isActive() && _open.contains(zoneNumber);
 }
 
 void ZoneController::onCloseTimer(int zoneNumber)
@@ -256,6 +304,16 @@ void ZoneController::onCloseTimer(int zoneNumber)
     closeOne(zoneNumber, _open.value(zoneNumber).pendingReason);
 }
 
+void ZoneController::onBankRetryTimer()
+{
+    if(_open.isEmpty() == true) {
+        _bankClosePending = false;
+        return;
+    }
+
+    closeAll(_bankCloseReason);
+}
+
 void ZoneController::onWatchdogTimer()
 {
     QMap<quint32, bool> actual;
@@ -265,9 +323,18 @@ void ZoneController::onWatchdogTimer()
         return;
     }
 
-    QMap<quint32, bool> expected;
+    bool mismatch = false;
     for(auto it = _zoneGpioMap.constBegin(); it != _zoneGpioMap.constEnd(); ++it) {
-        expected.insert(it.value(), _open.contains(it.key()));
+        const bool closing = _open.contains(it.key()) && _open.value(it.key()).closing;
+        if(actual.contains(it.value()) == false) {
+            mismatch = true;
+        }
+        else if(closing == false && actual.value(it.value()) != _open.contains(it.key())) {
+            mismatch = true;
+        }
+    }
+    if(actual.count() != _zoneGpioMap.count()) {
+        mismatch = true;
     }
 
     int asserted = 0;
@@ -279,23 +346,43 @@ void ZoneController::onWatchdogTimer()
 
     int allowed = 0;
     QList<int> late;
+    QList<int> due;
     for(auto it = _open.constBegin(); it != _open.constEnd(); ++it) {
         allowed = qMax(allowed, it.value().capAtOpen);
         if(it.value().deadline.hasExpired()) {
-            late.append(it.key());
+            if(it.value().closing == false && _closeTimers.value(it.key())->isActive()) {
+                due.append(it.key());
+            }
+            else {
+                late.append(it.key());
+            }
         }
     }
 
-    const bool mismatch = actual != expected;
     const bool overCount = asserted > allowed;
+    const bool nothingOpen = _open.isEmpty();
 
     if(mismatch || overCount || late.isEmpty() == false) {
         logText(LVL_ERROR, QString("Watchdog tripped: open zones [%1], past deadline [%2], %3 lines asserted, %4 allowed")
                                .arg(zoneListText(_open.keys()), zoneListText(late))
                                .arg(asserted).arg(allowed));
         tripWatchdog();
+        return;
     }
-    else if(_faulted == true && _open.isEmpty()) {
+
+    for(int zoneNumber : due) {
+        // A slot answering an earlier zone's zoneClosed may have closed or re-opened this one.
+        const bool stillDue = _open.contains(zoneNumber)
+                              && _open.value(zoneNumber).closing == false
+                              && _open.value(zoneNumber).deadline.hasExpired();
+        if(stillDue == true && closeOne(zoneNumber, CloseReason::Deadline) == false) {
+            logText(LVL_ERROR, QString("Watchdog could not close zone %1 at its deadline").arg(zoneNumber));
+            tripWatchdog();
+            return;
+        }
+    }
+
+    if(_faulted == true && nothingOpen == true) {
         _faulted = false;
         logText(LVL_WARNING, "Watchdog read-back matches the expected line state; fault latch cleared");
     }
