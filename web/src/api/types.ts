@@ -50,10 +50,9 @@ export interface ProgramStartTime {
   timezone: string
 }
 
-export interface ProgramZone {
-  id: number
-  zoneId: number
-  sequence: number
+/** One step of a program. `zones` holds zone ids (`zone.id`). */
+export interface ProgramStep {
+  zones: number[]
   durationSeconds: number
 }
 
@@ -66,19 +65,13 @@ export interface Program {
   intervalDays: number
   anchorDate: string | null
   startTimes: ProgramStartTime[]
-  zones: ProgramZone[]
+  steps: ProgramStep[]
   nextRunUtc: string | null
 }
 
 export interface StartTimeDraft {
   minutesAfterMidnight: number
   timezone: string
-}
-
-export interface ProgramZoneDraft {
-  zoneId: number
-  sequence: number
-  durationSeconds: number
 }
 
 export interface ProgramDraft {
@@ -89,7 +82,7 @@ export interface ProgramDraft {
   intervalDays: number
   anchorDate: string | null
   startTimes: StartTimeDraft[]
-  zones: ProgramZoneDraft[]
+  steps: ProgramStep[]
 }
 
 export type SettingsMap = Record<string, string>

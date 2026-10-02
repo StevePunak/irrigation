@@ -7,6 +7,9 @@ export const SETTING_KEYS = {
 
 export const DEFAULT_MAX_ZONE_SECONDS = 3600
 
+/** The daemon's default for max_concurrent_zones, used until /api/status reports the real cap. */
+export const DEFAULT_MAX_CONCURRENT_ZONES = 2
+
 /** Disabled only by the exact value '0', matching the daemon's scheduler. Widening the match shows watering off while the valves still run. */
 export function parseMasterEnabled(value: string | undefined): boolean {
   return value !== '0'

@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react'
 import { createProgram, deleteProgram, updateProgram } from '../api/client'
-import { DAY_MODES, type DayMode, type Program, type ProgramDraft, type Zone } from '../api/types'
-import { WEEKDAY_LABELS, toDraft, toggleWeekday } from '../programs/dayRule'
-import { inputValueToMinutes, minutesToInputValue } from '../time/zonedformat'
+import { DAY_MODES, type DayMode, type Program, type ProgramDraft, type ProgramStep, type Zone } from '../api/types'
+import { WEEKDAY_LABELS, toDraft, toggleWeekday, totalRuntimeSeconds } from '../programs/dayRule'
+import { formatDuration, inputValueToMinutes, minutesToInputValue } from '../time/zonedformat'
 
 const DAY_MODE_LABELS: Record<DayMode, string> = {
   DaysOfWeek: 'Days of week',
@@ -10,6 +10,8 @@ const DAY_MODE_LABELS: Record<DayMode, string> = {
   Even: 'Even days',
   EveryNDays: 'Every N days',
 }
+
+const DEFAULT_STEP_SECONDS = 600
 
 export function emptyDraft(controllerZone: string): ProgramDraft {
   return {
@@ -20,7 +22,7 @@ export function emptyDraft(controllerZone: string): ProgramDraft {
     intervalDays: 0,
     anchorDate: null,
     startTimes: [{ minutesAfterMidnight: 360, timezone: controllerZone }],
-    zones: [],
+    steps: [],
   }
 }
 
@@ -34,11 +36,15 @@ export function validationError(draft: ProgramDraft): string | null {
   if (draft.startTimes.some((start) => start.timezone.length === 0)) {
     return 'The controller timezone is not known yet. Save again once the controller answers.'
   }
-  if (draft.zones.length === 0) {
-    return 'Add at least one zone.'
+  if (draft.steps.length === 0) {
+    return 'Add at least one step.'
   }
-  if (draft.zones.some((zone) => zone.durationSeconds < 1)) {
-    return 'Every zone needs a duration of at least one minute.'
+  const empty = draft.steps.findIndex((step) => step.zones.length === 0)
+  if (empty >= 0) {
+    return `Step ${empty + 1} needs at least one zone.`
+  }
+  if (draft.steps.some((step) => step.durationSeconds < 1)) {
+    return 'Every step needs a duration of at least one minute.'
   }
   if (draft.dayMode === 'DaysOfWeek' && (draft.dowMask & 0b1111111) === 0) {
     return 'Select at least one day of the week.'
@@ -54,15 +60,11 @@ export function validationError(draft: ProgramDraft): string | null {
   return null
 }
 
-/** Sets each zone's `sequence` to its array position, 1-based. */
-function resequence(zones: ProgramDraft['zones']): ProgramDraft['zones'] {
-  return zones.map((zone, index) => ({ ...zone, sequence: index + 1 }))
-}
-
 export interface ProgramEditorProps {
   program: Program | null
   zones: Zone[]
   controllerZone: string
+  maxConcurrentZones: number
   onDone: () => void
   onCancel: () => void
 }
@@ -71,6 +73,7 @@ export default function ProgramEditor({
   program,
   zones,
   controllerZone,
+  maxConcurrentZones,
   onDone,
   onCancel,
 }: ProgramEditorProps) {
@@ -89,20 +92,25 @@ export default function ProgramEditor({
     setDraft((current) => ({ ...current, ...changes }))
   }, [])
 
+  const patchStep = useCallback((index: number, change: (step: ProgramStep) => ProgramStep) => {
+    setDraft((current) => ({
+      ...current,
+      steps: current.steps.map((step, i) => (i === index ? change(step) : step)),
+    }))
+  }, [])
+
   const onSave = useCallback(async () => {
     const unparsed = startTimeText.findIndex((text) => inputValueToMinutes(text) < 0)
     if (unparsed >= 0) {
       setError(`Start time ${unparsed + 1} needs a valid time.`)
       return
     }
-    // Sequence numbers in `draft.zones` are stale between edits; onSave is what makes them match array order.
     const normalised: ProgramDraft = {
       ...draft,
       name: draft.name.trim(),
       startTimes: draft.startTimes.map((start) =>
         start.timezone.length === 0 ? { ...start, timezone: controllerZone } : start,
       ),
-      zones: resequence(draft.zones),
     }
     const invalid = validationError(normalised)
     if (invalid !== null) {
@@ -140,18 +148,23 @@ export default function ProgramEditor({
     }
   }, [program, onDone])
 
-  const moveZone = useCallback((index: number, delta: number) => {
+  const moveStep = useCallback((index: number, delta: number) => {
     setDraft((current) => {
       const target = index + delta
-      if (target < 0 || target >= current.zones.length) {
+      if (target < 0 || target >= current.steps.length) {
         return current
       }
-      const reordered = [...current.zones]
+      const reordered = [...current.steps]
       const [moved] = reordered.splice(index, 1)
       reordered.splice(target, 0, moved!)
-      return { ...current, zones: reordered }
+      return { ...current, steps: reordered }
     })
   }, [])
+
+  const zoneLabel = (zoneId: number) => {
+    const zone = zones.find((candidate) => candidate.id === zoneId)
+    return zone === undefined ? `Zone id ${zoneId}` : `${zone.number} · ${zone.name}`
+  }
 
   return (
     <section className="screen editor">
@@ -291,83 +304,109 @@ export default function ProgramEditor({
         Add start time
       </button>
 
-      <h3>Zones in run order</h3>
-      {draft.zones.map((zone, index) => (
-        <div key={index} className="row">
-          <label>
-            {`Zone ${index + 1} valve`}
-            <select
-              value={String(zone.zoneId)}
-              onChange={(event) => {
-                patch({
-                  zones: draft.zones.map((entry, i) =>
-                    i === index ? { ...entry, zoneId: Number(event.target.value) } : entry,
-                  ),
-                })
-              }}
-            >
-              {zones.map((candidate) => (
-                <option key={candidate.id} value={String(candidate.id)}>
-                  {`${candidate.number} · ${candidate.name}`}
-                </option>
+      <h3>Steps in run order</h3>
+      {draft.steps.map((step, index) => {
+        const number = index + 1
+        const available = zones.filter((zone) => step.zones.includes(zone.id) === false)
+        return (
+          <div key={index} className="step" data-testid={`step-${number}`}>
+            <div className="row">
+              <span className="step__title">{`Step ${number}`}</span>
+              {step.zones.map((zoneId) => (
+                <span key={zoneId} className="chip">
+                  {zoneLabel(zoneId)}
+                  <button
+                    type="button"
+                    className="chip__remove"
+                    aria-label={`Remove ${zoneLabel(zoneId)} from step ${number}`}
+                    onClick={() => {
+                      patchStep(index, (current) => ({
+                        ...current,
+                        zones: current.zones.filter((id) => id !== zoneId),
+                      }))
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
               ))}
-            </select>
-          </label>
-          <label>
-            {`Zone ${index + 1} minutes`}
-            <input
-              type="number"
-              min={1}
-              value={Math.round(zone.durationSeconds / 60)}
-              onChange={(event) => {
-                patch({
-                  zones: draft.zones.map((entry, i) =>
-                    i === index ? { ...entry, durationSeconds: Number(event.target.value) * 60 } : entry,
-                  ),
-                })
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              moveZone(index, -1)
-            }}
-          >
-            {`Move zone ${index + 1} up`}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              moveZone(index, 1)
-            }}
-          >
-            {`Move zone ${index + 1} down`}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              patch({ zones: draft.zones.filter((_, i) => i !== index) })
-            }}
-          >
-            {`Remove zone ${index + 1}`}
-          </button>
-        </div>
-      ))}
+              <select
+                aria-label={`Add a zone to step ${number}`}
+                value=""
+                onChange={(event) => {
+                  if (event.target.value === '') {
+                    return
+                  }
+                  const zoneId = Number(event.target.value)
+                  patchStep(index, (current) => ({ ...current, zones: [...current.zones, zoneId] }))
+                }}
+              >
+                <option value="">+ zone</option>
+                {available.map((candidate) => (
+                  <option key={candidate.id} value={String(candidate.id)}>
+                    {`${candidate.number} · ${candidate.name}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="row">
+              <label>
+                {`Step ${number} minutes`}
+                <input
+                  type="number"
+                  min={1}
+                  value={Math.round(step.durationSeconds / 60)}
+                  onChange={(event) => {
+                    const minutes = Number(event.target.value)
+                    patchStep(index, (current) => ({ ...current, durationSeconds: minutes * 60 }))
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  moveStep(index, -1)
+                }}
+              >
+                {`Move step ${number} up`}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  moveStep(index, 1)
+                }}
+              >
+                {`Move step ${number} down`}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  patch({ steps: draft.steps.filter((_, i) => i !== index) })
+                }}
+              >
+                {`Remove step ${number}`}
+              </button>
+            </div>
+            {step.zones.length > maxConcurrentZones ? (
+              <p className="step__warning" data-testid={`wave-warning-${number}`}>
+                {`Runs in waves: ${maxConcurrentZones} zones at a time`}
+              </p>
+            ) : null}
+          </div>
+        )
+      })}
       <button
         type="button"
         onClick={() => {
-          const first = zones[0]
-          if (first === undefined) {
-            return
-          }
-          patch({
-            zones: [...draft.zones, { zoneId: first.id, sequence: draft.zones.length + 1, durationSeconds: 600 }],
-          })
+          patch({ steps: [...draft.steps, { zones: [], durationSeconds: DEFAULT_STEP_SECONDS }] })
         }}
       >
-        Add zone
+        Add step
       </button>
+
+      <div data-testid="editor-total">
+        Total {formatDuration(totalRuntimeSeconds(draft.steps, maxConcurrentZones))}
+      </div>
 
       <div className="row">
         <button

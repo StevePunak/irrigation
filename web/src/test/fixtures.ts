@@ -41,9 +41,9 @@ export const morningProgram: Program = {
   intervalDays: 0,
   anchorDate: null,
   startTimes: [{ id: 3, minutesAfterMidnight: 360, timezone: 'America/Los_Angeles' }],
-  zones: [
-    { id: 21, zoneId: 7, sequence: 1, durationSeconds: 600 },
-    { id: 22, zoneId: 9, sequence: 2, durationSeconds: 300 },
+  steps: [
+    { zones: [7], durationSeconds: 600 },
+    { zones: [9], durationSeconds: 300 },
   ],
   nextRunUtc: '2026-09-14T13:00:00Z',
 }

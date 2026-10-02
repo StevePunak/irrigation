@@ -4,7 +4,7 @@ import {
   type DayMode,
   type Program,
   type ProgramStartTime,
-  type ProgramZone,
+  type ProgramStep,
   type QueuedProgram,
   type RunningProgram,
   type RunningZone,
@@ -157,12 +157,10 @@ function decodeStartTime(element: unknown, field: string): ProgramStartTime {
   }
 }
 
-function decodeProgramZone(element: unknown, field: string): ProgramZone {
+function decodeProgramStep(element: unknown, field: string): ProgramStep {
   const source = asRecord(element, field)
   return {
-    id: num(source, 'id', field),
-    zoneId: num(source, 'zoneId', field),
-    sequence: num(source, 'sequence', field),
+    zones: numbers(source['zones'], `${field}.zones`),
     durationSeconds: num(source, 'durationSeconds', field),
   }
 }
@@ -186,9 +184,9 @@ export function decodePrograms(payload: unknown): Program[] {
       startTimes: asArray(source['startTimes'], `${field}.startTimes`).map((start, i) =>
         decodeStartTime(start, `${field}.startTimes[${i}]`),
       ),
-      zones: asArray(source['zones'], `${field}.zones`)
-        .map((zone, i) => decodeProgramZone(zone, `${field}.zones[${i}]`))
-        .sort((left, right) => left.sequence - right.sequence),
+      steps: asArray(source['steps'], `${field}.steps`).map((step, i) =>
+        decodeProgramStep(step, `${field}.steps[${i}]`),
+      ),
       nextRunUtc: instant(source, 'nextRunUtc', field),
     }
   })

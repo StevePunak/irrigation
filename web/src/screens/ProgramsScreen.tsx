@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { getPrograms, getZones, runProgram, updateProgram } from '../api/client'
 import type { Program, Zone } from '../api/types'
 import { dayRuleSummary, toDraft, totalRuntimeSeconds } from '../programs/dayRule'
+import { DEFAULT_MAX_CONCURRENT_ZONES } from '../settings/settingsMap'
 import { formatDayAndClock, formatDuration, minutesToClock } from '../time/zonedformat'
 import ProgramEditor from './ProgramEditor'
 import type { ScreenProps } from './screenProps'
@@ -61,6 +62,7 @@ export default function ProgramsScreen({ status, refresh }: ScreenProps) {
   )
 
   const controllerZone = status?.timezone ?? ''
+  const maxConcurrentZones = status?.maxConcurrentZones ?? DEFAULT_MAX_CONCURRENT_ZONES
 
   if (editing !== undefined) {
     return (
@@ -68,6 +70,7 @@ export default function ProgramsScreen({ status, refresh }: ScreenProps) {
         program={editing}
         zones={zones}
         controllerZone={controllerZone}
+        maxConcurrentZones={maxConcurrentZones}
         onDone={() => {
           setEditing(undefined)
           void load()
@@ -128,16 +131,16 @@ export default function ProgramsScreen({ status, refresh }: ScreenProps) {
             ))}
           </ul>
 
-          <ol data-testid="zone-sequence">
-            {program.zones.map((zone, index) => (
-              <li key={zone.id}>
-                {index + 1}. {zoneName(zone.zoneId)} {formatDuration(zone.durationSeconds)}
+          <ol data-testid="step-sequence">
+            {program.steps.map((step, index) => (
+              <li key={index}>
+                {index + 1}. {step.zones.map(zoneName).join(' + ')} {formatDuration(step.durationSeconds)}
               </li>
             ))}
           </ol>
 
           <div data-testid="total-runtime">
-            Total {formatDuration(totalRuntimeSeconds(program.zones))}
+            Total {formatDuration(totalRuntimeSeconds(program.steps, maxConcurrentZones))}
           </div>
 
           <div data-testid="next-run">

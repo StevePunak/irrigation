@@ -363,3 +363,42 @@ option {
   color: var(--danger-ink);
   border-color: var(--danger);
 }
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--gap);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius);
+  background: var(--glass-raised);
+}
+
+.step__title {
+  font-weight: 700;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+}
+
+.chip__remove {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1.1rem;
+}
+
+.step__warning {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.9rem;
+}

@@ -77,8 +77,13 @@ export function dayRuleSummary(
   }
 }
 
-export function totalRuntimeSeconds(zones: { durationSeconds: number }[]): number {
-  return zones.reduce((total, zone) => total + zone.durationSeconds, 0)
+/** Assumes nothing else is running: a step of n zones under a cap of c runs in ceil(n / c) waves of its duration. */
+export function totalRuntimeSeconds(
+  steps: { zones: readonly unknown[]; durationSeconds: number }[],
+  maxConcurrentZones: number,
+): number {
+  const cap = Math.max(1, maxConcurrentZones)
+  return steps.reduce((total, step) => total + Math.ceil(step.zones.length / cap) * step.durationSeconds, 0)
 }
 
 /** Converts a loaded program into the body shape POST and PUT accept. */
@@ -94,10 +99,9 @@ export function toDraft(program: Program): ProgramDraft {
       minutesAfterMidnight: start.minutesAfterMidnight,
       timezone: start.timezone,
     })),
-    zones: program.zones.map((zone, index) => ({
-      zoneId: zone.zoneId,
-      sequence: index + 1,
-      durationSeconds: zone.durationSeconds,
+    steps: program.steps.map((step) => ({
+      zones: [...step.zones],
+      durationSeconds: step.durationSeconds,
     })),
   }
 }
