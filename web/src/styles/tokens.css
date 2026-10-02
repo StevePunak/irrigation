@@ -3,10 +3,10 @@
 
   --ground: #050a06;
   --scrim: rgba(3, 8, 5, 0.55);
-  --glass: rgba(8, 14, 11, 0.5);
+  --glass: rgba(8, 14, 11, 0.2);
   --glass-raised: rgba(255, 255, 255, 0.07);
   --glass-edge: rgba(220, 245, 230, 0.14);
-  --blur: 18px;
+  --blur: 6px;
 
   --ink: #eef5f0;
   --ink-dim: #a9bcb0;
