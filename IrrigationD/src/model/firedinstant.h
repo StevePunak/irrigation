@@ -10,7 +10,11 @@
 class FiredInstant
 {
 public:
-    /** @brief What happened when a scheduled start time came due. */
+    /**
+     * @brief What happened when a scheduled start time came due.
+     *
+     * SkippedBusy is read from rows written before programs queued and is never written.
+     */
     enum class Outcome
     {
         Ran,
@@ -18,7 +22,12 @@ public:
         SkippedRain,
         Missed,
         SkippedStop,
-        Failed
+        Failed,
+        Queued,
+        DroppedStop,
+        DroppedRestart,
+        SkippedDuplicate,
+        SkippedDisabled
     };
 
     /** @brief Parses @p value into an Outcome. Returns Missed when unrecognised. */
@@ -42,12 +51,17 @@ private:
     public:
         OutcomeToStringMap()
         {
-            insert(Outcome::Ran,         "ran");
-            insert(Outcome::SkippedBusy, "skipped_busy");
-            insert(Outcome::SkippedRain, "skipped_rain");
-            insert(Outcome::Missed,      "missed");
-            insert(Outcome::SkippedStop, "skipped_stop");
-            insert(Outcome::Failed,      "failed");
+            insert(Outcome::Ran,              "ran");
+            insert(Outcome::SkippedBusy,      "skipped_busy");
+            insert(Outcome::SkippedRain,      "skipped_rain");
+            insert(Outcome::Missed,           "missed");
+            insert(Outcome::SkippedStop,      "skipped_stop");
+            insert(Outcome::Failed,           "failed");
+            insert(Outcome::Queued,           "queued");
+            insert(Outcome::DroppedStop,      "dropped_stop");
+            insert(Outcome::DroppedRestart,   "dropped_restart");
+            insert(Outcome::SkippedDuplicate, "skipped_duplicate");
+            insert(Outcome::SkippedDisabled,  "skipped_disabled");
         }
     };
 

@@ -439,6 +439,154 @@ bool IrrigationDataSource::deleteProgramZones(int programId)
     return executeQuery(query);
 }
 
+ProgramStepList IrrigationDataSource::stepsFor(int programId, bool* ok)
+{
+    ProgramStepList result;
+    if(ok != nullptr) {
+        *ok = false;
+    }
+
+    bool success = false;
+    QSqlQuery steps = prepareQuery(
+        "SELECT id, program_id, sequence, duration_seconds "
+        "FROM program_steps WHERE program_id = :programId ORDER BY sequence, id",
+        &success);
+    if(success == false) {
+        return result;
+    }
+
+    steps.bindValue(":programId", programId);
+    if(executeQuery(steps) == false) {
+        return result;
+    }
+
+    while(steps.next()) {
+        ProgramStep step;
+        step.id = steps.value("id").toInt();
+        step.programId = steps.value("program_id").toInt();
+        step.sequence = steps.value("sequence").toInt();
+        step.durationSeconds = steps.value("duration_seconds").toInt();
+        result.append(step);
+    }
+
+    QSqlQuery zones = prepareQuery(
+        "SELECT z.step_id, z.zone_id FROM program_step_zones z "
+        "JOIN program_steps s ON s.id = z.step_id "
+        "WHERE s.program_id = :programId ORDER BY z.id",
+        &success);
+    if(success == false) {
+        return ProgramStepList();
+    }
+
+    zones.bindValue(":programId", programId);
+    if(executeQuery(zones) == false) {
+        return ProgramStepList();
+    }
+
+    while(zones.next()) {
+        const int stepId = zones.value("step_id").toInt();
+        for(ProgramStep& step : result) {
+            if(step.id == stepId) {
+                step.zoneIds.append(zones.value("zone_id").toInt());
+                break;
+            }
+        }
+    }
+
+    if(ok != nullptr) {
+        *ok = true;
+    }
+    return result;
+}
+
+bool IrrigationDataSource::insertProgramStep(ProgramStep& step)
+{
+    bool success = false;
+    QSqlQuery query = prepareQuery(
+        "INSERT INTO program_steps (program_id, sequence, duration_seconds) "
+        "VALUES (:programId, :sequence, :durationSeconds)",
+        &success);
+    if(success == false) {
+        return false;
+    }
+
+    query.bindValue(":programId",       step.programId);
+    query.bindValue(":sequence",        step.sequence);
+    query.bindValue(":durationSeconds", step.durationSeconds);
+
+    if(executeQuery(query) == false) {
+        return false;
+    }
+    step.id = query.lastInsertId().toInt();
+
+    for(int zoneId : step.zoneIds) {
+        QSqlQuery zone = prepareQuery(
+            "INSERT INTO program_step_zones (step_id, zone_id) VALUES (:stepId, :zoneId)",
+            &success);
+        if(success == false) {
+            return false;
+        }
+
+        zone.bindValue(":stepId", step.id);
+        zone.bindValue(":zoneId", zoneId);
+        if(executeQuery(zone) == false) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool IrrigationDataSource::deleteProgramSteps(int programId)
+{
+    bool success = false;
+    QSqlQuery zones = prepareQuery(
+        "DELETE FROM program_step_zones WHERE step_id IN "
+        "(SELECT id FROM program_steps WHERE program_id = :programId)",
+        &success);
+    if(success == false) {
+        return false;
+    }
+
+    zones.bindValue(":programId", programId);
+    if(executeQuery(zones) == false) {
+        return false;
+    }
+
+    QSqlQuery steps = prepareQuery("DELETE FROM program_steps WHERE program_id = :programId", &success);
+    if(success == false) {
+        return false;
+    }
+
+    steps.bindValue(":programId", programId);
+    return executeQuery(steps);
+}
+
+bool IrrigationDataSource::replaceFiringOutcomes(FiredInstant::Outcome from, FiredInstant::Outcome to, int* changed)
+{
+    if(changed != nullptr) {
+        *changed = 0;
+    }
+
+    bool success = false;
+    QSqlQuery query = prepareQuery("UPDATE fired_instants SET outcome = :to WHERE outcome = :from", &success);
+    if(success == false) {
+        return false;
+    }
+
+    query.bindValue(":to",   FiredInstant::outcomeToString(to));
+    query.bindValue(":from", FiredInstant::outcomeToString(from));
+
+    if(executeQuery(query) == false) {
+        return false;
+    }
+
+    if(changed != nullptr) {
+        *changed = query.numRowsAffected();
+    }
+    return true;
+}
+
 bool IrrigationDataSource::recordFiring(const FiredInstant& instant)
 {
     bool success = false;

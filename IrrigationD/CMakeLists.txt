@@ -1,6 +1,6 @@
 set(PROJ irrigationd)
 
-set(IRRIGATION_DB_VERSION 1.0.0)
+set(IRRIGATION_DB_VERSION 1.1.0)
 
 find_package(Qt6 6.7 REQUIRED COMPONENTS Core Network HttpServer Sql)
 
@@ -28,6 +28,7 @@ qt_add_executable(${PROJ}
     src/model/program.h           src/model/program.cpp
     src/model/programstarttime.h  src/model/programstarttime.cpp
     src/model/programzone.h       src/model/programzone.cpp
+    src/model/programstep.h       src/model/programstep.cpp
     src/model/firedinstant.h      src/model/firedinstant.cpp
 )
 

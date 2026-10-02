@@ -25,6 +25,7 @@ irrigation_add_test(tst_irrigationdatasource
     ../src/model/program.cpp
     ../src/model/programstarttime.cpp
     ../src/model/programzone.cpp
+    ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
 
@@ -36,6 +37,7 @@ irrigation_add_test(tst_repository
     ../src/model/program.cpp
     ../src/model/programstarttime.cpp
     ../src/model/programzone.cpp
+    ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
 
@@ -65,6 +67,7 @@ irrigation_add_test(tst_programrunner
     ../src/model/program.cpp
     ../src/model/programstarttime.cpp
     ../src/model/programzone.cpp
+    ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
 
@@ -77,6 +80,7 @@ irrigation_add_test(tst_scheduler
     ../src/model/program.cpp
     ../src/model/programstarttime.cpp
     ../src/model/programzone.cpp
+    ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
 
@@ -92,5 +96,6 @@ irrigation_add_test(tst_controlserver
     ../src/model/program.cpp
     ../src/model/programstarttime.cpp
     ../src/model/programzone.cpp
+    ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )

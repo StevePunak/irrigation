@@ -10,6 +10,7 @@
 #include "model/firedinstant.h"
 #include "model/program.h"
 #include "model/programstarttime.h"
+#include "model/programstep.h"
 #include "model/programzone.h"
 #include "model/zone.h"
 
@@ -81,6 +82,30 @@ public:
 
     /** @brief Deletes every zone entry belonging to @p programId. @return True on success. */
     bool deleteProgramZones(int programId);
+
+    /**
+     * @brief Returns the steps belonging to @p programId, ordered by sequence then id, each with its zone ids.
+     * @param ok When non-null, set to false when a query failed, in which case the list is empty.
+     */
+    ProgramStepList stepsFor(int programId, bool* ok = nullptr);
+
+    /**
+     * @brief Inserts @p step and one program_step_zones row per zone id, and writes the generated id back.
+     *
+     * Not atomic on its own; call inside a transaction when a partial step must not survive.
+     * @return True on success.
+     */
+    bool insertProgramStep(ProgramStep& step);
+
+    /** @brief Deletes every step belonging to @p programId together with its zone rows. @return True on success. */
+    bool deleteProgramSteps(int programId);
+
+    /**
+     * @brief Changes every firing whose outcome is @p from to @p to.
+     * @param changed When non-null, set to the number of rows changed.
+     * @return True on success.
+     */
+    bool replaceFiringOutcomes(FiredInstant::Outcome from, FiredInstant::Outcome to, int* changed = nullptr);
 
     /** @brief Records that a start time fired. A repeat of the same instant is a no-op. @return True on success. */
     bool recordFiring(const FiredInstant& instant);
