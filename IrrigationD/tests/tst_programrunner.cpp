@@ -128,7 +128,7 @@ private slots:
     void reportsItsNameStepAndWaitingZones();
     void abortWhileIdleIsANoOp();
     void aStepZoneWhoseClosePendingWaitsRatherThanAborting();
-    void aStepZoneRefusedByOpenZoneAbortsWhileAnotherZoneIsClosing();
+    void aStepZoneRefusedByAPendingBankCloseAbortsWhileAClosingSiblingWaits();
 };
 
 void TestProgramRunner::walksStepsInSequenceOrder()
@@ -614,7 +614,7 @@ void TestProgramRunner::aStepZoneWhoseClosePendingWaitsRatherThanAborting()
     QVERIFY(runner.isRunning());
 }
 
-void TestProgramRunner::aStepZoneRefusedByOpenZoneAbortsWhileAnotherZoneIsClosing()
+void TestProgramRunner::aStepZoneRefusedByAPendingBankCloseAbortsWhileAClosingSiblingWaits()
 {
     Bench bench;
     QVERIFY(bench.begin());
@@ -623,19 +623,21 @@ void TestProgramRunner::aStepZoneRefusedByOpenZoneAbortsWhileAnotherZoneIsClosin
 
     QVERIFY(controller.openZone(1, 600));
     bench.backend.setFailNextSetValues(true);
-    QVERIFY(controller.closeZone(1) == false);
+    QVERIFY(controller.allOff() == false);
     QVERIFY(controller.isClosing(1));
 
     const int programId = bench.buildProgram({ StepSpec{ { 1, 2 }, 300 } });
     ProgramRunner runner(&controller, &bench.source);
     QSignalSpy aborted(&runner, &ProgramRunner::programAborted);
 
-    bench.backend.refusedOffset = 6;
-    bench.backend.refuse = true;
     QVERIFY(runner.startProgram(programId) == false);
 
     QCOMPARE(aborted.count(), 1);
     QVERIFY(runner.isRunning() == false);
+    // Zone 1 is skipped as closing and never attempted; zone 2, not itself closing,
+    // is the one openZone() actually refuses, under the pending bank close.
+    QVERIFY(controller.errorText().contains("Refused to open zone 2"));
+    QVERIFY(controller.errorText().contains("closing every zone is pending a retry"));
     QCOMPARE(controller.openZoneNumbers(), QList<int>({ 1 }));
     QVERIFY(controller.isClosing(1));
     QCOMPARE(bench.backend.lineValue(6), Gpio::Value::Inactive);

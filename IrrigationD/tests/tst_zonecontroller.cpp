@@ -79,6 +79,7 @@ private slots:
     void aZoneClosingOnItsOwnTimerNeverTripsAFastWatchdog();
     void reopeningAZoneWhoseCloseIsPendingIsRefusedButAllOffWins();
     void watchdogClosesADueZoneWhoseCloseTimerIsStillArmed();
+    void openingAZoneDuringAPendingBankCloseIsRefusedButAllOffWins();
 };
 
 void TestZoneController::beginDrivesEveryLineInactive()
@@ -951,6 +952,43 @@ void TestZoneController::watchdogClosesADueZoneWhoseCloseTimerIsStillArmed()
     QCOMPARE(closed.first().at(1).value<ZoneController::CloseReason>(), ZoneController::CloseReason::Deadline);
     QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
     QVERIFY(controller.isFaulted() == false);
+}
+
+void TestZoneController::openingAZoneDuringAPendingBankCloseIsRefusedButAllOffWins()
+{
+    MockBackend backend;
+    QVERIFY(backend.openChipByLabel("mock"));
+
+    ZoneController controller(&backend, eightZones(), true, 3600);
+    QVERIFY(controller.begin());
+    QVERIFY(controller.openZone(3, 600));
+
+    backend.setFailNextSetValues(true);
+    QVERIFY(controller.allOff() == false);
+    QVERIFY(controller.isClosing(3));
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Active);
+
+    backend.resetSetValuesCallCount();
+    QVERIFY(controller.openZone(3, 600) == false);
+    QVERIFY(controller.errorText().contains("closing every zone is pending a retry"));
+    QCOMPARE(backend.setValuesCallCount(), 0);
+
+    // Zone 1 was never open: only the bank-wide retry flag, not a per-zone closing
+    // flag, can be refusing it here.
+    QVERIFY(controller.openZone(1, 600) == false);
+    QVERIFY(controller.errorText().contains("closing every zone is pending a retry"));
+    QCOMPARE(backend.setValuesCallCount(), 0);
+    QCOMPARE(backend.lineValue(5), Gpio::Value::Inactive);
+
+    QSignalSpy closed(&controller, &ZoneController::zoneClosed);
+    QVERIFY(controller.allOff());
+
+    QCOMPARE(closed.count(), 1);
+    QCOMPARE(closed.first().at(0).toInt(), 3);
+    QCOMPARE(closed.first().at(1).value<ZoneController::CloseReason>(), ZoneController::CloseReason::AllOff);
+    QCOMPARE(backend.lineValue(12), Gpio::Value::Inactive);
+    QVERIFY(controller.isClosing(3) == false);
+    QVERIFY(controller.openZoneNumbers().isEmpty());
 }
 
 QTEST_MAIN(TestZoneController)
