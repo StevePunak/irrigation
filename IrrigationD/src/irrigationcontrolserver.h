@@ -15,6 +15,7 @@
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QJsonObject>
+#include <QList>
 #include <QString>
 #include <QStringList>
 
@@ -22,11 +23,38 @@ class IrrigationDataSource;
 class QHttpServerResponse;
 class QTcpServer;
 
-/** @brief Snapshot of the daemon's runtime state, published through updateStatus() and served by GET /admin/status. */
+/** @brief One open zone in a status snapshot. zone is the zone number. */
+struct RunningZoneStatus
+{
+    int zone = 0;
+    int secondsRemaining = 0;
+    bool fromProgram = false;
+};
+
+/** @brief One waiting program in a status snapshot. */
+struct QueuedProgramStatus
+{
+    int programId = 0;
+    QString name;
+    QDateTime queuedAtUtc;
+};
+
+/**
+ * @brief Snapshot of the daemon's runtime state, published through updateStatus() and served by GET /admin/status.
+ *
+ * programId is zero when no program runs. running is ordered by zone number. waitingZones
+ * holds zone numbers.
+ */
 struct ServerStatus
 {
-    int runningZone = 0;
-    int secondsRemaining = 0;
+    QList<RunningZoneStatus> running;
+    int programId = 0;
+    QString programName;
+    int programStep = 0;
+    int programStepCount = 0;
+    QList<int> waitingZones;
+    QList<QueuedProgramStatus> queue;
+    int maxConcurrentZones = 0;
     QDateTime nextRunUtc;
     QString timezone;
     bool masterEnabled = false;

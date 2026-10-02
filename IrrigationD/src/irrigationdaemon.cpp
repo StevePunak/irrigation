@@ -325,8 +325,42 @@ void IrrigationDaemon::publishStatus()
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
 
     ServerStatus status;
-    status.runningZone = _zoneController->openZoneNumbers().value(0);
-    status.secondsRemaining = _zoneController->secondsRemaining(status.runningZone);
+
+    const QList<int> openZones = _zoneController->openZoneNumbers();
+    for(int zoneNumber : openZones) {
+        RunningZoneStatus running;
+        running.zone = zoneNumber;
+        running.secondsRemaining = _zoneController->secondsRemaining(zoneNumber);
+        running.fromProgram = _programRunner->ownsZone(zoneNumber);
+        status.running.append(running);
+    }
+
+    if(_programRunner->isRunning()) {
+        status.programId = _programRunner->runningProgramId();
+        status.programName = _programRunner->runningProgramName();
+        status.programStep = _programRunner->stepNumber();
+        status.programStepCount = _programRunner->stepCount();
+        status.waitingZones = _programRunner->waitingZones();
+    }
+
+    const QList<ProgramQueue::Entry> waiting = _programQueue->entries();
+    if(waiting.isEmpty() == false) {
+        const ProgramList programs = _dataSource->allPrograms();
+        for(const ProgramQueue::Entry& entry : waiting) {
+            QueuedProgramStatus queued;
+            queued.programId = entry.programId;
+            queued.queuedAtUtc = entry.queuedAtUtc;
+            for(const Program& program : programs) {
+                if(program.id == entry.programId) {
+                    queued.name = program.name;
+                    break;
+                }
+            }
+            status.queue.append(queued);
+        }
+    }
+
+    status.maxConcurrentZones = _zoneController->maxConcurrentZones();
     status.timezone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
     status.masterEnabled = _dataSource->isMasterEnabled();
     status.stopHeld = _stopButton->isHeld();
