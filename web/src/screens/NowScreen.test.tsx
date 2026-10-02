@@ -382,3 +382,46 @@ describe('NowScreen with several zones open', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('2 zones already running')
   })
 })
+
+describe("the zone tile's own Stop button", () => {
+  it('calls stopZone with the tile zone number when clicked', async () => {
+    const user = userEvent.setup()
+    const stopZone = vi.spyOn(client, 'stopZone').mockResolvedValue(undefined)
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-5')
+    await user.click(within(tile).getByRole('button', { name: 'Stop zone 5' }))
+
+    expect(stopZone).toHaveBeenCalledWith(5)
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalled()
+    })
+  })
+
+  it('stays enabled for a running zone that is otherwise disabled', async () => {
+    render(
+      <NowScreen
+        status={{ ...idleStatus, running: [{ zone: 7, secondsRemaining: 100, source: 'manual' }] }}
+        polls={1}
+        refresh={refresh}
+      />,
+    )
+
+    const tile = await screen.findByTestId('zone-tile-7')
+    expect(within(tile).getByRole('button', { name: 'Stop zone 7' })).toBeEnabled()
+  })
+
+  it('stays enabled on a running zone while another action is in flight', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'runZone').mockImplementation(() => new Promise<void>(() => {}))
+
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    const idleTile = await screen.findByTestId('zone-tile-1')
+    await user.click(within(idleTile).getByRole('button', { name: /run/i }))
+
+    // The pending run marks the screen busy; the running zone's own tile must still allow a stop.
+    expect(within(idleTile).getByRole('button', { name: /run/i })).toBeDisabled()
+    expect(within(screen.getByTestId('zone-tile-3')).getByRole('button', { name: 'Stop zone 3' })).toBeEnabled()
+  })
+})
