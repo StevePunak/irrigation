@@ -9,6 +9,7 @@ import {
   runProgram,
   runZone,
   stopAll,
+  stopZone,
 } from './client'
 import { ApiError } from './types'
 import { installFetchStub } from '../test/fetchStub'
@@ -62,7 +63,7 @@ describe('client', () => {
       intervalDays: 3,
       anchorDate: '2026-04-01',
       startTimes: [{ minutesAfterMidnight: 1140, timezone: 'America/Los_Angeles' }],
-      zones: [{ zoneId: 9, sequence: 1, durationSeconds: 300 }],
+      steps: [{ zones: [9], durationSeconds: 300 }],
     })
 
     expect(calls[0]?.url).toBe('/api/programs')
@@ -74,7 +75,7 @@ describe('client', () => {
       intervalDays: 3,
       anchorDate: '2026-04-01',
       startTimes: [{ minutesAfterMidnight: 1140, timezone: 'America/Los_Angeles' }],
-      zones: [{ zoneId: 9, sequence: 1, durationSeconds: 300 }],
+      steps: [{ zones: [9], durationSeconds: 300 }],
     })
   })
 
@@ -96,6 +97,30 @@ describe('client', () => {
     expect(calls[0]?.url).toBe('/api/stop')
     expect(calls[0]?.method).toBe('POST')
     expect(calls[0]?.body).toBeNull()
+  })
+
+  it('stops one zone by zone number with no body', async () => {
+    const { calls } = installFetchStub(() => ({ status: 202 }))
+    await stopZone(3)
+    expect(calls[0]?.url).toBe('/api/zones/3/stop')
+    expect(calls[0]?.method).toBe('POST')
+    expect(calls[0]?.body).toBeNull()
+  })
+
+  it('carries the refusal reason of a 409', async () => {
+    installFetchStub(() => ({ status: 409, body: { error: '2 zones already running', reason: 'cap_reached' } }))
+
+    const error = await runZone(zoneFixtures[2]!, 600).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(409)
+    expect((error as ApiError).message).toBe('2 zones already running')
+    expect((error as ApiError).reason).toBe('cap_reached')
+  })
+
+  it('leaves the reason null when the body has none', async () => {
+    installFetchStub(() => ({ status: 404, body: { error: 'unknown zone' } }))
+    const error = await runZone(zoneFixtures[2]!, 600).catch((caught: unknown) => caught)
+    expect((error as ApiError).reason).toBeNull()
   })
 
   it('decodes zones through the decoder', async () => {

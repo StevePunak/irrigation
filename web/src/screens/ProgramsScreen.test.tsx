@@ -17,7 +17,7 @@ const eveningProgram: Program = {
   intervalDays: 3,
   anchorDate: '2026-04-01',
   startTimes: [{ id: 4, minutesAfterMidnight: 1140, timezone: 'America/New_York' }],
-  zones: [{ id: 23, zoneId: 8, sequence: 1, durationSeconds: 1200 }],
+  steps: [{ zones: [8], durationSeconds: 1200 }],
   nextRunUtc: null,
 }
 
@@ -62,11 +62,11 @@ describe('ProgramsScreen', () => {
     expect(within(morning).getByTestId('start-times')).not.toHaveTextContent('America/Los_Angeles')
   })
 
-  it('shows the zone sequence with each duration and the computed total', async () => {
+  it('shows the steps with each duration and the computed total', async () => {
     render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
 
     const morning = await screen.findByTestId('program-1')
-    const sequence = within(morning).getByTestId('zone-sequence')
+    const sequence = within(morning).getByTestId('step-sequence')
 
     // zoneIds 7 and 9 are zone numbers 1 and 3.
     expect(sequence).toHaveTextContent('1. Front lawn 10 min')
@@ -121,9 +121,9 @@ describe('ProgramsScreen', () => {
       intervalDays: 0,
       anchorDate: null,
       startTimes: [{ minutesAfterMidnight: 360, timezone: 'America/Los_Angeles' }],
-      zones: [
-        { zoneId: 7, sequence: 1, durationSeconds: 600 },
-        { zoneId: 9, sequence: 2, durationSeconds: 300 },
+      steps: [
+        { zones: [7], durationSeconds: 600 },
+        { zones: [9], durationSeconds: 300 },
       ],
     })
   })
@@ -168,6 +168,20 @@ describe('ProgramsScreen', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/toggle failed/i)
     expect(alert).not.toHaveTextContent(/reload failed/i)
+  })
+
+  it('joins the zones of a step and totals the runtime assuming waves', async () => {
+    const drip: Program = { ...morningProgram, id: 3, steps: [{ zones: [7, 8, 9], durationSeconds: 600 }] }
+    vi.spyOn(client, 'getPrograms').mockResolvedValue([drip])
+
+    const { unmount } = render(<ProgramsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    const program = await screen.findByTestId('program-3')
+    expect(within(program).getByTestId('step-sequence')).toHaveTextContent('1. Front lawn + Side strip + Roses 10 min')
+    expect(within(program).getByTestId('total-runtime')).toHaveTextContent('20 min')
+    unmount()
+
+    render(<ProgramsScreen status={{ ...idleStatus, maxConcurrentZones: 3 }} polls={1} refresh={refresh} />)
+    expect(within(await screen.findByTestId('program-3')).getByTestId('total-runtime')).toHaveTextContent('10 min')
   })
 
   it('says so when there are no programs', async () => {

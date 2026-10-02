@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import NowScreen from './NowScreen'
 import * as client from '../api/client'
 import { ApiError } from '../api/types'
-import { idleStatus, runningStatus, zoneFixtures } from '../test/fixtures'
+import { cappedStatus, idleStatus, runningStatus, zoneFixtures } from '../test/fixtures'
 
 const refresh = vi.fn()
 
@@ -12,6 +12,7 @@ beforeEach(() => {
   vi.spyOn(client, 'getZones').mockResolvedValue(zoneFixtures)
   vi.spyOn(client, 'runZone').mockResolvedValue(undefined)
   vi.spyOn(client, 'stopAll').mockResolvedValue(undefined)
+  vi.spyOn(client, 'stopZone').mockResolvedValue(undefined)
   vi.stubGlobal(
     'confirm',
     vi.fn(() => {
@@ -184,7 +185,7 @@ describe('NowScreen concurrent actions', () => {
     await user.click(
       within(await screen.findByTestId('zone-tile-1')).getByRole('button', { name: /run/i }),
     )
-    await user.click(screen.getByRole('button', { name: /stop/i }))
+    await user.click(screen.getByRole('button', { name: 'STOP' }))
 
     await waitFor(() => {
       expect(client.stopAll).toHaveBeenCalled()
@@ -215,7 +216,7 @@ describe('NowScreen concurrent actions', () => {
 
     const tile = await screen.findByTestId('zone-tile-1')
     await user.click(within(tile).getByRole('button', { name: /run/i }))
-    await user.click(screen.getByRole('button', { name: /stop/i }))
+    await user.click(screen.getByRole('button', { name: 'STOP' }))
 
     await act(async () => {
       pending.reject?.(new Error('zone run failed'))
@@ -260,7 +261,7 @@ describe('NowScreen concurrent actions', () => {
 
     const tile = await screen.findByTestId('zone-tile-1')
     await user.click(within(tile).getByRole('button', { name: /run/i }))
-    await user.click(screen.getByRole('button', { name: /stop/i }))
+    await user.click(screen.getByRole('button', { name: 'STOP' }))
 
     await act(async () => {
       resolveStop?.()
@@ -280,7 +281,7 @@ describe('StopButton', () => {
     const stopAll = vi.spyOn(client, 'stopAll').mockResolvedValue(undefined)
 
     render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
-    await user.click(await screen.findByRole('button', { name: /stop/i }))
+    await user.click(await screen.findByRole('button', { name: 'STOP' }))
 
     expect(stopAll).toHaveBeenCalledTimes(1)
     expect(globalThis.confirm).not.toHaveBeenCalled()
@@ -292,7 +293,7 @@ describe('StopButton', () => {
 
     render(<NowScreen status={null} polls={0} refresh={refresh} />)
 
-    const stop = await screen.findByRole('button', { name: /stop/i })
+    const stop = await screen.findByRole('button', { name: 'STOP' })
     expect(stop).toBeEnabled()
 
     await user.click(stop)
@@ -304,8 +305,80 @@ describe('StopButton', () => {
     vi.spyOn(client, 'stopAll').mockRejectedValue(new ApiError(500, 'could not close the bank'))
 
     render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
-    await user.click(await screen.findByRole('button', { name: /stop/i }))
+    await user.click(await screen.findByRole('button', { name: 'STOP' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not close the bank/i)
+  })
+})
+
+describe('NowScreen with several zones open', () => {
+  it('lists one row per open zone with its countdown and tag', async () => {
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+
+    const manual = await screen.findByTestId('running-zone-1')
+    expect(manual).toHaveTextContent('Front lawn')
+    expect(manual).toHaveTextContent('4:00')
+    expect(manual).toHaveTextContent(/manual/i)
+
+    const program = screen.getByTestId('running-zone-5')
+    expect(program).toHaveTextContent('Vegetable bed')
+    expect(program).toHaveTextContent('28:32')
+    expect(program).toHaveTextContent(/program/i)
+  })
+
+  it('shows the program step with its waiting zone and the queue', async () => {
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByTestId('program-line')).toHaveTextContent('Morning Drip — step 1 of 2, zone 7 waiting')
+    expect(screen.getByTestId('queue-line')).toHaveTextContent('Queued: Summer')
+  })
+
+  it('stops one zone by its zone number', async () => {
+    const user = userEvent.setup()
+    const stopZone = vi.spyOn(client, 'stopZone').mockResolvedValue(undefined)
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+
+    // Both the running row and the open tile answer to "Stop zone 5"; scope to the row.
+    const row = await screen.findByTestId('running-zone-5')
+    await user.click(within(row).getByRole('button', { name: 'Stop zone 5' }))
+
+    expect(stopZone).toHaveBeenCalledWith(5)
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalled()
+    })
+    expect(client.stopAll).not.toHaveBeenCalled()
+  })
+
+  it('glows every open tile', async () => {
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+    expect(await screen.findByTestId('zone-tile-1')).toHaveAttribute('data-running', 'true')
+    expect(screen.getByTestId('zone-tile-5')).toHaveAttribute('data-running', 'true')
+    expect(screen.getByTestId('zone-tile-2')).toHaveAttribute('data-running', 'false')
+  })
+
+  it('disables Run on closed tiles at the cap and says why', async () => {
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+
+    const closed = await screen.findByTestId('zone-tile-2')
+    expect(within(closed).getByRole('button', { name: /run/i })).toBeDisabled()
+    expect(within(screen.getByTestId('zone-tile-1')).getByRole('button', { name: 'Stop zone 1' })).toBeEnabled()
+    expect(screen.getByTestId('cap-hint')).toHaveTextContent('2 of 2 running')
+  })
+
+  it('keeps every tile live below the cap', async () => {
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    expect(within(await screen.findByTestId('zone-tile-2')).getByRole('button', { name: /run/i })).toBeEnabled()
+    expect(screen.queryByTestId('cap-hint')).toBeNull()
+  })
+
+  it('shows the reason a run was refused', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'runZone').mockRejectedValue(new ApiError(409, '2 zones already running', 'cap_reached'))
+    render(<NowScreen status={runningStatus} polls={1} refresh={refresh} />)
+
+    await user.click(within(await screen.findByTestId('zone-tile-2')).getByRole('button', { name: /run/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('2 zones already running')
   })
 })

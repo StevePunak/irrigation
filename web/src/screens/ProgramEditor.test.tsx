@@ -11,16 +11,23 @@ const onCancel = vi.fn()
 
 const LA = 'America/Los_Angeles'
 
-function renderEditor(program: Parameters<typeof ProgramEditor>[0]['program']) {
+function renderEditor(program: Parameters<typeof ProgramEditor>[0]['program'], maxConcurrentZones = 2) {
   return render(
     <ProgramEditor
       program={program}
       zones={zoneFixtures}
       controllerZone={LA}
+      maxConcurrentZones={maxConcurrentZones}
       onDone={onDone}
       onCancel={onCancel}
     />,
   )
+}
+
+/** Adds a step and puts the zone with database id `zoneId` in it. */
+async function addStepWithZone(user: ReturnType<typeof userEvent.setup>, stepNumber: number, zoneId: number) {
+  await user.click(screen.getByRole('button', { name: 'Add step' }))
+  await user.selectOptions(screen.getByLabelText(`Add a zone to step ${stepNumber}`), String(zoneId))
 }
 
 beforeEach(() => {
@@ -55,27 +62,33 @@ describe('validationError', () => {
   const base = emptyDraft(LA)
 
   it('requires a name', () => {
-    expect(validationError({ ...base, name: '', dowMask: 1, zones: [{ zoneId: 7, sequence: 1, durationSeconds: 60 }] })).toMatch(/name/i)
+    expect(validationError({ ...base, name: '', dowMask: 1, steps: [{ zones: [7], durationSeconds: 60 }] })).toMatch(/name/i)
   })
 
-  it('requires at least one zone', () => {
-    expect(validationError({ ...base, name: 'X', dowMask: 1, zones: [] })).toMatch(/zone/i)
+  it('requires at least one step', () => {
+    expect(validationError({ ...base, name: 'X', dowMask: 1, steps: [] })).toMatch(/step/i)
+  })
+
+  it('requires a zone in every step', () => {
+    expect(
+      validationError({ ...base, name: 'X', dowMask: 1, steps: [{ zones: [7], durationSeconds: 60 }, { zones: [], durationSeconds: 60 }] }),
+    ).toMatch(/step 2 needs at least one zone/i)
   })
 
   it('requires at least one start time', () => {
     expect(
-      validationError({ ...base, name: 'X', dowMask: 1, startTimes: [], zones: [{ zoneId: 7, sequence: 1, durationSeconds: 60 }] }),
+      validationError({ ...base, name: 'X', dowMask: 1, startTimes: [], steps: [{ zones: [7], durationSeconds: 60 }] }),
     ).toMatch(/start time/i)
   })
 
   it('requires at least one weekday in DaysOfWeek mode', () => {
     expect(
-      validationError({ ...base, name: 'X', dowMask: 0, zones: [{ zoneId: 7, sequence: 1, durationSeconds: 60 }] }),
+      validationError({ ...base, name: 'X', dowMask: 0, steps: [{ zones: [7], durationSeconds: 60 }] }),
     ).toMatch(/day/i)
   })
 
   it('requires an interval and an anchor in EveryNDays mode', () => {
-    const everyN = { ...base, name: 'X', dayMode: 'EveryNDays' as const, zones: [{ zoneId: 7, sequence: 1, durationSeconds: 60 }] }
+    const everyN = { ...base, name: 'X', dayMode: 'EveryNDays' as const, steps: [{ zones: [7], durationSeconds: 60 }] }
     expect(validationError({ ...everyN, intervalDays: 0, anchorDate: '2026-04-01' })).toMatch(/interval/i)
     expect(validationError({ ...everyN, intervalDays: 3, anchorDate: null })).toMatch(/date/i)
     expect(validationError({ ...everyN, intervalDays: 3, anchorDate: '2026-04-01' })).toBeNull()
@@ -83,7 +96,7 @@ describe('validationError', () => {
 
   it('rejects a zero-length zone run', () => {
     expect(
-      validationError({ ...base, name: 'X', dowMask: 1, zones: [{ zoneId: 7, sequence: 1, durationSeconds: 0 }] }),
+      validationError({ ...base, name: 'X', dowMask: 1, steps: [{ zones: [7], durationSeconds: 0 }] }),
     ).toMatch(/duration/i)
   })
 })
@@ -101,10 +114,9 @@ describe('creating a program', () => {
     await user.clear(screen.getByLabelText(/start time 1/i))
     await user.type(screen.getByLabelText(/start time 1/i), '19:00')
 
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
-    await user.selectOptions(screen.getByLabelText(/zone 1 valve/i), '9')
-    await user.clear(screen.getByLabelText(/zone 1 minutes/i))
-    await user.type(screen.getByLabelText(/zone 1 minutes/i), '5')
+    await addStepWithZone(user, 1, 9)
+    await user.clear(screen.getByLabelText('Step 1 minutes'))
+    await user.type(screen.getByLabelText('Step 1 minutes'), '5')
 
     await user.click(screen.getByRole('button', { name: /save/i }))
 
@@ -119,22 +131,22 @@ describe('creating a program', () => {
       intervalDays: 0,
       anchorDate: null,
       startTimes: [{ minutesAfterMidnight: 1140, timezone: LA }],
-      zones: [{ zoneId: 9, sequence: 1, durationSeconds: 300 }],
+      steps: [{ zones: [9], durationSeconds: 300 }],
     })
     expect(onDone).toHaveBeenCalled()
   })
 
-  it('stores the zone database id as zoneId', async () => {
+  it('stores the zone database id in a step', async () => {
     const user = userEvent.setup()
     const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
 
     renderEditor(null)
     await user.type(screen.getByLabelText(/program name/i), 'Evening')
     await user.click(screen.getByRole('button', { name: 'Mon' }))
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await user.click(screen.getByRole('button', { name: 'Add step' }))
 
     // Option values are zone ids; the label the user reads carries the number.
-    const picker = screen.getByLabelText(/zone 1 valve/i)
+    const picker = screen.getByLabelText('Add a zone to step 1')
     expect(within(picker).getByRole('option', { name: /3 · Roses/ })).toHaveValue('9')
 
     await user.selectOptions(picker, '9')
@@ -143,7 +155,7 @@ describe('creating a program', () => {
     await waitFor(() => {
       expect(createProgram).toHaveBeenCalled()
     })
-    expect(createProgram.mock.calls[0]![0].zones[0]!.zoneId).toBe(9)
+    expect(createProgram.mock.calls[0]![0].steps[0]!.zones[0]).toBe(9)
   })
 
   it('accepts the last minute of the day', async () => {
@@ -155,8 +167,7 @@ describe('creating a program', () => {
     await user.click(screen.getByRole('button', { name: 'Mon' }))
     await user.clear(screen.getByLabelText(/start time 1/i))
     await user.type(screen.getByLabelText(/start time 1/i), '23:59')
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
-    await user.selectOptions(screen.getByLabelText(/zone 1 valve/i), '7')
+    await addStepWithZone(user, 1, 7)
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {
@@ -183,7 +194,7 @@ describe('creating a program', () => {
     renderEditor(null)
     await user.type(screen.getByLabelText(/program name/i), 'Evening')
     await user.click(screen.getByRole('button', { name: 'Mon' }))
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await addStepWithZone(user, 1, 7)
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
@@ -201,10 +212,10 @@ describe('editing a program', () => {
     expect(screen.getByRole('button', { name: 'Wed' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Tue' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByLabelText(/start time 1/i)).toHaveValue('06:00')
-    expect(screen.getByLabelText(/zone 1 valve/i)).toHaveValue('7')
-    expect(screen.getByLabelText(/zone 1 minutes/i)).toHaveValue(10)
-    expect(screen.getByLabelText(/zone 2 valve/i)).toHaveValue('9')
-    expect(screen.getByLabelText(/zone 2 minutes/i)).toHaveValue(5)
+    expect(screen.getByTestId('step-1')).toHaveTextContent('1 · Front lawn')
+    expect(screen.getByLabelText('Step 1 minutes')).toHaveValue(10)
+    expect(screen.getByTestId('step-2')).toHaveTextContent('3 · Roses')
+    expect(screen.getByLabelText('Step 2 minutes')).toHaveValue(5)
   })
 
   it('puts the full draft under the program id', async () => {
@@ -222,46 +233,42 @@ describe('editing a program', () => {
     const [id, draft] = updateProgram.mock.calls[0]!
     expect(id).toBe(1)
     expect(draft.name).toBe('Morning revised')
-    expect(draft.zones).toEqual([
-      { zoneId: 7, sequence: 1, durationSeconds: 600 },
-      { zoneId: 9, sequence: 2, durationSeconds: 300 },
+    expect(draft.steps).toEqual([
+      { zones: [7], durationSeconds: 600 },
+      { zones: [9], durationSeconds: 300 },
     ])
   })
 
-  it('save renumbers zone sequence from the final array order after a move', async () => {
+  it('saves steps in their moved order', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
 
     renderEditor(morningProgram)
-    await user.click(screen.getByRole('button', { name: /move zone 2 up/i }))
+    await user.click(screen.getByRole('button', { name: 'Move step 2 up' }))
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {
       expect(updateProgram).toHaveBeenCalled()
     })
-    expect(updateProgram.mock.calls[0]![1].zones).toEqual([
-      { zoneId: 9, sequence: 1, durationSeconds: 300 },
-      { zoneId: 7, sequence: 2, durationSeconds: 600 },
+    expect(updateProgram.mock.calls[0]![1].steps).toEqual([
+      { zones: [9], durationSeconds: 300 },
+      { zones: [7], durationSeconds: 600 },
     ])
   })
 
-  it('save renumbers zone sequence from the final array order after removing a middle zone', async () => {
+  it('saves the remaining steps in order after removing a middle one', async () => {
     const user = userEvent.setup()
     const updateProgram = vi.spyOn(client, 'updateProgram').mockResolvedValue(undefined)
 
     renderEditor(morningProgram)
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
-    await user.selectOptions(screen.getByLabelText(/zone 3 valve/i), '11')
-    await user.click(screen.getByRole('button', { name: /remove zone 2/i }))
+    await addStepWithZone(user, 3, 11)
+    await user.click(screen.getByRole('button', { name: 'Remove step 2' }))
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {
       expect(updateProgram).toHaveBeenCalled()
     })
-    expect(updateProgram.mock.calls[0]![1].zones.map((zone) => [zone.zoneId, zone.sequence])).toEqual([
-      [7, 1],
-      [11, 2],
-    ])
+    expect(updateProgram.mock.calls[0]![1].steps.map((step) => step.zones)).toEqual([[7], [11]])
   })
 
   it('defaults an added start time to the controller timezone', async () => {
@@ -342,10 +349,19 @@ describe('an editor opened before the controller timezone is known', () => {
     const user = userEvent.setup()
     const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
 
-    render(<ProgramEditor program={null} zones={zoneFixtures} controllerZone="" onDone={onDone} onCancel={onCancel} />)
+    render(
+      <ProgramEditor
+        program={null}
+        zones={zoneFixtures}
+        controllerZone=""
+        maxConcurrentZones={2}
+        onDone={onDone}
+        onCancel={onCancel}
+      />,
+    )
     await user.type(screen.getByLabelText(/program name/i), 'Evening')
     await user.click(screen.getByRole('button', { name: 'Mon' }))
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
+    await addStepWithZone(user, 1, 7)
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/timezone is not known yet/i)
@@ -357,12 +373,28 @@ describe('an editor opened before the controller timezone is known', () => {
     const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
 
     const { rerender } = render(
-      <ProgramEditor program={null} zones={zoneFixtures} controllerZone="" onDone={onDone} onCancel={onCancel} />,
+      <ProgramEditor
+        program={null}
+        zones={zoneFixtures}
+        controllerZone=""
+        maxConcurrentZones={2}
+        onDone={onDone}
+        onCancel={onCancel}
+      />,
     )
     await user.type(screen.getByLabelText(/program name/i), 'Evening')
     await user.click(screen.getByRole('button', { name: 'Mon' }))
-    await user.click(screen.getByRole('button', { name: /add zone/i }))
-    rerender(<ProgramEditor program={null} zones={zoneFixtures} controllerZone={LA} onDone={onDone} onCancel={onCancel} />)
+    await addStepWithZone(user, 1, 7)
+    rerender(
+      <ProgramEditor
+        program={null}
+        zones={zoneFixtures}
+        controllerZone={LA}
+        maxConcurrentZones={2}
+        onDone={onDone}
+        onCancel={onCancel}
+      />,
+    )
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {
@@ -414,5 +446,74 @@ describe('deleting a program', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
     expect(onDone).not.toHaveBeenCalled()
     expect(onCancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('steps', () => {
+  it('adds zones to a step as chips and removes them again', async () => {
+    const user = userEvent.setup()
+    renderEditor(null)
+
+    await addStepWithZone(user, 1, 7)
+    await user.selectOptions(screen.getByLabelText('Add a zone to step 1'), '9')
+
+    const step = screen.getByTestId('step-1')
+    expect(step).toHaveTextContent('1 · Front lawn')
+    expect(step).toHaveTextContent('3 · Roses')
+
+    await user.click(screen.getByRole('button', { name: 'Remove 1 · Front lawn from step 1' }))
+    expect(screen.queryByRole('button', { name: 'Remove 1 · Front lawn from step 1' })).toBeNull()
+  })
+
+  it('offers only zones the step does not already hold', async () => {
+    const user = userEvent.setup()
+    renderEditor(null)
+
+    await addStepWithZone(user, 1, 7)
+
+    const picker = screen.getByLabelText('Add a zone to step 1')
+    expect(within(picker).queryByRole('option', { name: /1 · Front lawn/ })).toBeNull()
+    expect(within(picker).getByRole('option', { name: /3 · Roses/ })).toBeInTheDocument()
+  })
+
+  it('warns that a step with more zones than the cap runs in waves', async () => {
+    const user = userEvent.setup()
+    renderEditor(null, 2)
+
+    await addStepWithZone(user, 1, 7)
+    await user.selectOptions(screen.getByLabelText('Add a zone to step 1'), '8')
+    expect(screen.queryByTestId('wave-warning-1')).toBeNull()
+
+    await user.selectOptions(screen.getByLabelText('Add a zone to step 1'), '9')
+    expect(screen.getByTestId('wave-warning-1')).toHaveTextContent(/runs in waves/i)
+  })
+
+  it('totals the runtime assuming waves', async () => {
+    const user = userEvent.setup()
+    renderEditor(null, 2)
+
+    await addStepWithZone(user, 1, 7)
+    await user.selectOptions(screen.getByLabelText('Add a zone to step 1'), '8')
+    await user.selectOptions(screen.getByLabelText('Add a zone to step 1'), '9')
+    await addStepWithZone(user, 2, 10)
+    await user.clear(screen.getByLabelText('Step 2 minutes'))
+    await user.type(screen.getByLabelText('Step 2 minutes'), '5')
+
+    // Step 1: three zones under a cap of two, 10 min each wave; step 2: 5 min.
+    expect(screen.getByTestId('editor-total')).toHaveTextContent('25 min')
+  })
+
+  it('refuses to save a step with no zone', async () => {
+    const user = userEvent.setup()
+    const createProgram = vi.spyOn(client, 'createProgram').mockResolvedValue(undefined)
+    renderEditor(null)
+
+    await user.type(screen.getByLabelText(/program name/i), 'Empty step')
+    await user.click(screen.getByRole('button', { name: 'Mon' }))
+    await user.click(screen.getByRole('button', { name: 'Add step' }))
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/step 1 needs at least one zone/i)
+    expect(createProgram).not.toHaveBeenCalled()
   })
 })

@@ -32,6 +32,17 @@ export const runningStatus: Status = {
   running: [{ zone: 3, secondsRemaining: 120, source: 'manual' }],
 }
 
+/** Zone 5 belongs to the running program, zone 1 was started by hand; the cap of 2 is full. */
+export const cappedStatus: Status = {
+  ...idleStatus,
+  running: [
+    { zone: 1, secondsRemaining: 240, source: 'manual' },
+    { zone: 5, secondsRemaining: 1712, source: 'program' },
+  ],
+  program: { id: 2, name: 'Morning Drip', step: 1, stepCount: 2, waitingZones: [7] },
+  queue: [{ programId: 1, name: 'Summer', queuedAtUtc: '2026-09-14T13:00:04Z' }],
+}
+
 export const morningProgram: Program = {
   id: 1,
   name: 'Morning',

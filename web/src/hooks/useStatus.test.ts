@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as client from '../api/client'
-import { idleStatus, runningStatus } from '../test/fixtures'
+import { cappedStatus, idleStatus, runningStatus } from '../test/fixtures'
 import { IDLE_POLL_MS, RUNNING_POLL_MS, useStatus } from './useStatus'
 
 beforeEach(() => {
@@ -60,6 +60,33 @@ describe('useStatus', () => {
       await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
     })
     expect(getStatus).toHaveBeenCalledTimes(3)
+  })
+
+  it('polls every 2 s while a program waits for a slot with nothing open', async () => {
+    const waiting = {
+      ...idleStatus,
+      program: { id: 2, name: 'Morning Drip', step: 1, stepCount: 1, waitingZones: [7] },
+    }
+    const getStatus = vi.spyOn(client, 'getStatus').mockResolvedValue(waiting)
+    renderHook(() => useStatus())
+    await settle()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('polls every 2 s while only the queue is non-empty', async () => {
+    const queued = { ...idleStatus, queue: cappedStatus.queue }
+    const getStatus = vi.spyOn(client, 'getStatus').mockResolvedValue(queued)
+    renderHook(() => useStatus())
+    await settle()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
+    })
+    expect(getStatus).toHaveBeenCalledTimes(2)
   })
 
   it('tightens the interval as soon as a poll reports a run', async () => {

@@ -3,22 +3,43 @@ import { decodePrograms, decodeSettings, decodeStatus, decodeZones } from './dec
 import { DecodeError } from './types'
 
 const goodStatus = {
-  runningZone: 4,
-  secondsRemaining: 120,
+  running: [
+    { zone: 5, secondsRemaining: 1712, source: 'program' },
+    { zone: 1, secondsRemaining: 240, source: 'manual' },
+  ],
+  program: { id: 2, name: 'Morning Drip', step: 1, stepCount: 2, waitingZones: [7] },
+  queue: [{ programId: 1, name: 'Summer', queuedAtUtc: '2026-09-13T13:00:04Z' }],
+  maxConcurrentZones: 2,
   nextRunUtc: '2026-09-13T13:00:00Z',
   timezone: 'America/Los_Angeles',
   masterEnabled: true,
+  stopHeld: false,
   rainDelayUntilUtc: '',
 }
 
 describe('decodeStatus', () => {
   it('reads every field', () => {
     const status = decodeStatus(goodStatus)
-    expect(status.runningZone).toBe(4)
-    expect(status.secondsRemaining).toBe(120)
+    expect(status.running).toEqual([
+      { zone: 5, secondsRemaining: 1712, source: 'program' },
+      { zone: 1, secondsRemaining: 240, source: 'manual' },
+    ])
+    expect(status.program).toEqual({ id: 2, name: 'Morning Drip', step: 1, stepCount: 2, waitingZones: [7] })
+    expect(status.queue).toEqual([{ programId: 1, name: 'Summer', queuedAtUtc: '2026-09-13T13:00:04Z' }])
+    expect(status.maxConcurrentZones).toBe(2)
     expect(status.nextRunUtc).toBe('2026-09-13T13:00:00Z')
     expect(status.timezone).toBe('America/Los_Angeles')
     expect(status.masterEnabled).toBe(true)
+  })
+
+  it('reads a null program as no program running', () => {
+    expect(decodeStatus({ ...goodStatus, program: null }).program).toBeNull()
+  })
+
+  it('throws when program is absent', () => {
+    const { program, ...withoutProgram } = goodStatus
+    expect(program).toBeDefined()
+    expect(() => decodeStatus(withoutProgram)).toThrow(/status\.program/)
   })
 
   it('maps the empty timestamp to null', () => {
@@ -34,11 +55,21 @@ describe('decodeStatus', () => {
   })
 
   it('throws when a number arrives as a string', () => {
-    expect(() => decodeStatus({ ...goodStatus, secondsRemaining: '120' })).toThrow(/secondsRemaining/)
+    expect(() => decodeStatus({ ...goodStatus, maxConcurrentZones: '2' })).toThrow(/maxConcurrentZones/)
   })
 
   it('throws when a boolean arrives as a string', () => {
     expect(() => decodeStatus({ ...goodStatus, masterEnabled: 'true' })).toThrow(/masterEnabled/)
+  })
+
+  it('names the running entry with an unknown source', () => {
+    const running = [{ zone: 5, secondsRemaining: 10, source: 'timer' }]
+    expect(() => decodeStatus({ ...goodStatus, running })).toThrow(/running\[0\]\.source/)
+  })
+
+  it('names the waiting zone that is not a number', () => {
+    const program = { ...goodStatus.program, waitingZones: [7, '8'] }
+    expect(() => decodeStatus({ ...goodStatus, program })).toThrow(/waitingZones\[1\]/)
   })
 })
 
@@ -73,16 +104,15 @@ const goodProgram = {
   intervalDays: 0,
   anchorDate: null,
   startTimes: [{ id: 3, programId: 1, minutesAfterMidnight: 360, timezone: 'America/Los_Angeles' }],
-  zones: [{ id: 7, programId: 1, zoneId: 9, sequence: 1, durationSeconds: 600 }],
+  steps: [{ id: 7, zones: [9, 11], durationSeconds: 600 }],
   nextRunUtc: '2026-09-14T13:00:00Z',
 }
 
 describe('decodePrograms', () => {
-  it('reads nested start times and zones', () => {
+  it('reads nested start times and steps', () => {
     const program = decodePrograms([goodProgram])[0]
     expect(program?.startTimes[0]?.minutesAfterMidnight).toBe(360)
-    expect(program?.zones[0]?.zoneId).toBe(9)
-    expect(program?.zones[0]?.durationSeconds).toBe(600)
+    expect(program?.steps).toEqual([{ zones: [9, 11], durationSeconds: 600 }])
   })
 
   it('throws on an unknown dayMode', () => {
@@ -101,15 +131,20 @@ describe('decodePrograms', () => {
     expect(decodePrograms([{ ...goodProgram, anchorDate: '' }])[0]?.anchorDate).toBeNull()
   })
 
-  it('sorts zones by sequence', () => {
-    const shuffled = {
+  it('keeps steps in the order the daemon sent them', () => {
+    const twoSteps = {
       ...goodProgram,
-      zones: [
-        { id: 8, programId: 1, zoneId: 10, sequence: 2, durationSeconds: 300 },
-        { id: 7, programId: 1, zoneId: 9, sequence: 1, durationSeconds: 600 },
+      steps: [
+        { id: 8, zones: [10], durationSeconds: 300 },
+        { id: 7, zones: [9], durationSeconds: 600 },
       ],
     }
-    expect(decodePrograms([shuffled])[0]?.zones.map((zone) => zone.zoneId)).toEqual([9, 10])
+    expect(decodePrograms([twoSteps])[0]?.steps.map((step) => step.zones[0])).toEqual([10, 9])
+  })
+
+  it('names the step zone that is not a number', () => {
+    const badStep = { ...goodProgram, steps: [{ id: 7, zones: ['9'], durationSeconds: 600 }] }
+    expect(() => decodePrograms([badStep])).toThrow(/steps\[0\]\.zones\[0\]/)
   })
 })
 

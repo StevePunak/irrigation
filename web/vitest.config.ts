@@ -8,16 +8,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.mjs'],
-    exclude: [
-      '**/node_modules/**',
-      '**/dist/**',
-      'src/**/*.tz.test.ts',
-      'src/api/decode.test.ts',
-      'src/api/client.test.ts',
-      'src/programs/dayRule.test.ts',
-      'src/screens/ProgramEditor.test.tsx',
-      'src/screens/ProgramsScreen.test.tsx',
-    ],
+    exclude: ['**/node_modules/**', '**/dist/**', 'src/**/*.tz.test.ts'],
     restoreMocks: true,
   },
 })

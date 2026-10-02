@@ -89,12 +89,25 @@ describe('dayRuleSummary', () => {
 })
 
 describe('totalRuntimeSeconds', () => {
-  it('sums every zone duration', () => {
-    expect(totalRuntimeSeconds([{ durationSeconds: 600 }, { durationSeconds: 300 }])).toBe(900)
+  it('sums single-zone steps', () => {
+    expect(totalRuntimeSeconds([{ zones: [7], durationSeconds: 600 }, { zones: [9], durationSeconds: 300 }], 2)).toBe(900)
+  })
+
+  it('counts a step that fits under the cap once', () => {
+    expect(totalRuntimeSeconds([{ zones: [7, 8], durationSeconds: 600 }], 2)).toBe(600)
+  })
+
+  it('counts a step larger than the cap once per wave', () => {
+    expect(totalRuntimeSeconds([{ zones: [7, 8, 9], durationSeconds: 600 }], 2)).toBe(1200)
+    expect(totalRuntimeSeconds([{ zones: [7, 8, 9], durationSeconds: 600 }], 1)).toBe(1800)
+  })
+
+  it('treats a cap below one as one', () => {
+    expect(totalRuntimeSeconds([{ zones: [7, 8], durationSeconds: 60 }], 0)).toBe(120)
   })
 
   it('is zero for an empty program', () => {
-    expect(totalRuntimeSeconds([])).toBe(0)
+    expect(totalRuntimeSeconds([], 2)).toBe(0)
   })
 })
 
@@ -110,16 +123,13 @@ describe('toDraft', () => {
       intervalDays: 0,
       anchorDate: null,
       startTimes: [{ minutesAfterMidnight: 360, timezone: 'America/Los_Angeles' }],
-      zones: [
-        { zoneId: 7, sequence: 1, durationSeconds: 600 },
-        { zoneId: 9, sequence: 2, durationSeconds: 300 },
-      ],
+      steps: [{ zones: [7], durationSeconds: 600 }, { zones: [9], durationSeconds: 300 }],
     })
   })
 
   it('keeps the zone ids and drops the row ids', () => {
     const draft = toDraft(morningProgram)
-    expect(draft.zones.map((zone) => zone.zoneId)).toEqual([7, 9])
+    expect(draft.steps.map((step) => step.zones[0])).toEqual([7, 9])
     expect(JSON.stringify(draft)).not.toContain('"id"')
   })
 })

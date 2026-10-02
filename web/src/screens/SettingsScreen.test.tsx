@@ -187,6 +187,36 @@ describe('SettingsScreen', () => {
     expect(putZone.mock.calls[0]![1]).toEqual({ name: 'Pots', enabled: false })
   })
 
+  it('saves max zones at once as a string', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const field = await screen.findByLabelText(/max zones at once/i)
+    expect(field).toHaveValue(2)
+    await user.clear(field)
+    await user.type(field, '3')
+    await user.click(screen.getByRole('button', { name: 'Save max zones' }))
+
+    await waitFor(() => {
+      expect(putSettings).toHaveBeenCalledWith({ max_concurrent_zones: '3' })
+    })
+  })
+
+  it('refuses max zones outside 1 to 8', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const field = await screen.findByLabelText(/max zones at once/i)
+    await user.clear(field)
+    await user.type(field, '9')
+    await user.click(screen.getByRole('button', { name: 'Save max zones' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/1 to 8/)
+    expect(putSettings).not.toHaveBeenCalled()
+  })
+
   it('shows no settings values when they could not be loaded', async () => {
     vi.spyOn(client, 'getSettings').mockRejectedValue(new Error('controller unreachable'))
 
