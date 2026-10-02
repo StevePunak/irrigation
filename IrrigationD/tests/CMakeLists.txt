@@ -79,3 +79,18 @@ irrigation_add_test(tst_scheduler
     ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
+
+irrigation_add_test(tst_programqueue
+    tst_programqueue.cpp
+    ../src/programqueue.cpp
+    ../src/programrunner.cpp
+    ../src/runrequest.cpp
+    ../src/zonecontroller.cpp
+    ../src/database/irrigationdatasource.cpp
+    ../src/database/irrigation.qrc
+    ../src/model/zone.cpp
+    ../src/model/program.cpp
+    ../src/model/programstarttime.cpp
+    ../src/model/programstep.cpp
+    ../src/model/firedinstant.cpp
+)

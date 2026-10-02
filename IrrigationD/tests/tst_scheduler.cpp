@@ -221,7 +221,7 @@ void TestScheduler::fallBackRepeatPicksTheEarlierOffset()
 
     QCOMPARE(firedInstantCount(source, program.id, dbStartTime.id), 1);
     QVERIFY(source.hasFired(program.id, dbStartTime.id, earlierOffset));
-    QCOMPARE(outcomeFor(source, program.id, dbStartTime.id), QString("ran"));
+    QCOMPARE(outcomeFor(source, program.id, dbStartTime.id), QString("queued"));
 }
 
 void TestScheduler::fallBackRepeatInANegativeDstZonePicksTheEarlierOffset()
@@ -449,7 +449,7 @@ void TestScheduler::firesOnceInsideTheGraceWindow()
 
     QVERIFY(source.hasFired(program.id, startTime.id,
                              QDateTime(QDate(2026, 9, 15), QTime(6, 0), QTimeZone::UTC)));
-    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("queued"));
 }
 
 void TestScheduler::tickDoesNotFireBeforeTheScheduledInstant()
@@ -483,7 +483,7 @@ void TestScheduler::tickDoesNotFireBeforeTheScheduledInstant()
     clock.advance(1);
     scheduler.tick();
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("queued"));
 }
 
 void TestScheduler::graceWindowFiresAt120SecondsAndMissesAt121()
@@ -512,7 +512,7 @@ void TestScheduler::graceWindowFiresAt120SecondsAndMissesAt121()
         QSignalSpy spy(&scheduler, &Scheduler::programDue);
         scheduler.tick();
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+        QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("queued"));
     }
     {
         QTemporaryDir dir;
@@ -633,7 +633,7 @@ void TestScheduler::expiredRainDelayNoLongerSuppressesFiring()
     QSignalSpy spy(&scheduler, &Scheduler::programDue);
     scheduler.tick();
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("queued"));
 }
 
 void TestScheduler::rainDelayEndingBeforeTheInstantStillFires()
@@ -668,7 +668,7 @@ void TestScheduler::rainDelayEndingBeforeTheInstantStillFires()
     clock.setNowUtc(QDateTime(QDate(2026, 9, 15), QTime(6, 0, 10), QTimeZone::UTC));
     scheduler.tick();
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("queued"));
 }
 
 void TestScheduler::graceWindowCrossesLocalMidnight()
@@ -734,7 +734,7 @@ void TestScheduler::tickUsesTheZoneLocalDateAheadOfUtc()
 
     const QDateTime scheduledUtc(QDate(2026, 7, 15), QTime(19, 59), QTimeZone::UTC);
     QVERIFY(source.hasFired(program.id, startTime.id, scheduledUtc));
-    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("ran"));
+    QCOMPARE(outcomeFor(source, program.id, startTime.id), QString("queued"));
     QCOMPARE(firedInstantCount(source, program.id, startTime.id), 1);
 }
 

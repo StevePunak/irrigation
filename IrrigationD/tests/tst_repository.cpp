@@ -29,6 +29,12 @@ private slots:
     void isMasterEnabledOnlyExactZeroDisables_data();
     void isMasterEnabledOnlyExactZeroDisables();
     void isMasterEnabledDefaultsToEnabledWhenAbsent();
+    void programStepsRoundTripInSequenceOrder();
+    void deleteProgramStepsLeavesOtherProgramsIntact();
+    void deleteProgramCascadesThroughStepsAndTheirZones();
+    void replaceFiringOutcomesChangesOnlyTheNamedOutcome();
+    void everyOutcomeRoundTripsThroughItsStorageString_data();
+    void everyOutcomeRoundTripsThroughItsStorageString();
 };
 
 void TestRepository::recordFiringIsIdempotent()
@@ -576,6 +582,188 @@ void TestRepository::isMasterEnabledDefaultsToEnabledWhenAbsent()
     QVERIFY(source.settingValue("master_enabled").isEmpty());
 
     QVERIFY(source.isMasterEnabled());
+}
+
+void TestRepository::programStepsRoundTripInSequenceOrder()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Backyard";
+    QVERIFY(source.insertProgram(program));
+
+    // Inserted out of sequence order; zone ids, sequences and durations are kept clear of
+    // each other and of the program id so a transposed bind is observable.
+    ProgramStep third;
+    third.programId = program.id;
+    third.sequence = 12;
+    third.durationSeconds = 300;
+    third.zoneIds = { 6 };
+    QVERIFY(source.insertProgramStep(third));
+    QVERIFY(third.id > 0);
+
+    ProgramStep first;
+    first.programId = program.id;
+    first.sequence = 10;
+    first.durationSeconds = 600;
+    first.zoneIds = { 4, 7 };
+    QVERIFY(source.insertProgramStep(first));
+
+    ProgramStep second;
+    second.programId = program.id;
+    second.sequence = 11;
+    second.durationSeconds = 450;
+    second.zoneIds = { 8, 5, 3 };
+    QVERIFY(source.insertProgramStep(second));
+
+    bool ok = false;
+    const ProgramStepList steps = source.stepsFor(program.id, &ok);
+    QVERIFY(ok);
+    QCOMPARE(steps.count(), 3);
+    QCOMPARE(steps.at(0).id, first.id);
+    QCOMPARE(steps.at(0).programId, program.id);
+    QCOMPARE(steps.at(0).sequence, 10);
+    QCOMPARE(steps.at(0).durationSeconds, 600);
+    QCOMPARE(steps.at(0).zoneIds, QList<int>({ 4, 7 }));
+    QCOMPARE(steps.at(1).id, second.id);
+    QCOMPARE(steps.at(1).zoneIds, QList<int>({ 8, 5, 3 }));
+    QCOMPARE(steps.at(1).durationSeconds, 450);
+    QCOMPARE(steps.at(2).id, third.id);
+    QCOMPARE(steps.at(2).zoneIds, QList<int>({ 6 }));
+}
+
+void TestRepository::deleteProgramStepsLeavesOtherProgramsIntact()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program doomed;
+    doomed.name = "Doomed steps";
+    QVERIFY(source.insertProgram(doomed));
+
+    Program survivor;
+    survivor.name = "Survivor";
+    QVERIFY(source.insertProgram(survivor));
+
+    // Two filler steps on the survivor push doomed's own step ids past both program ids.
+    for(int i = 0; i < 2; i++) {
+        ProgramStep filler;
+        filler.programId = survivor.id;
+        filler.sequence = 90 + i;
+        filler.durationSeconds = 30;
+        filler.zoneIds = { 1 + i };
+        QVERIFY(source.insertProgramStep(filler));
+    }
+
+    ProgramStep doomedStep;
+    doomedStep.programId = doomed.id;
+    doomedStep.sequence = 1;
+    doomedStep.durationSeconds = 120;
+    doomedStep.zoneIds = { 3, 5 };
+    QVERIFY(source.insertProgramStep(doomedStep));
+
+    QVERIFY(source.deleteProgramSteps(doomed.id));
+
+    QCOMPARE(source.stepsFor(doomed.id).count(), 0);
+    QCOMPARE(source.stepsFor(survivor.id).count(), 2);
+
+    bool ok = false;
+    QSqlQuery orphans = source.rawQuery(
+        QString("SELECT COUNT(*) FROM program_step_zones WHERE step_id = %1").arg(doomedStep.id), &ok);
+    QVERIFY(ok);
+    QVERIFY(orphans.next());
+    QCOMPARE(orphans.value(0).toInt(), 0);
+}
+
+void TestRepository::deleteProgramCascadesThroughStepsAndTheirZones()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    Program program;
+    program.name = "Doomed";
+    QVERIFY(source.insertProgram(program));
+
+    ProgramStep step;
+    step.programId = program.id;
+    step.sequence = 1;
+    step.durationSeconds = 60;
+    step.zoneIds = { 2, 4 };
+    QVERIFY(source.insertProgramStep(step));
+
+    QVERIFY(source.deleteProgram(program.id));
+
+    bool ok = false;
+    QSqlQuery steps = source.rawQuery("SELECT COUNT(*) FROM program_steps", &ok);
+    QVERIFY(ok);
+    QVERIFY(steps.next());
+    QCOMPARE(steps.value(0).toInt(), 0);
+
+    QSqlQuery zones = source.rawQuery("SELECT COUNT(*) FROM program_step_zones", &ok);
+    QVERIFY(ok);
+    QVERIFY(zones.next());
+    QCOMPARE(zones.value(0).toInt(), 0);
+}
+
+void TestRepository::replaceFiringOutcomesChangesOnlyTheNamedOutcome()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+
+    const QDateTime at(QDate(2026, 10, 1), QTime(13, 0), QTimeZone::UTC);
+    const QList<FiredInstant::Outcome> outcomes = {
+        FiredInstant::Outcome::Queued, FiredInstant::Outcome::Ran, FiredInstant::Outcome::Queued
+    };
+    for(int i = 0; i < outcomes.count(); i++) {
+        FiredInstant instant;
+        instant.programId = 7;
+        instant.startTimeId = 40 + i;
+        instant.scheduledAtUtc = at;
+        instant.outcome = outcomes.at(i);
+        QVERIFY(source.recordFiring(instant));
+    }
+
+    int changed = -1;
+    QVERIFY(source.replaceFiringOutcomes(FiredInstant::Outcome::Queued, FiredInstant::Outcome::DroppedRestart, &changed));
+    QCOMPARE(changed, 2);
+
+    bool ok = false;
+    QSqlQuery query = source.rawQuery("SELECT start_time_id, outcome FROM fired_instants ORDER BY start_time_id", &ok);
+    QVERIFY(ok);
+    QVERIFY(query.next());
+    QCOMPARE(query.value(1).toString(), QString("dropped_restart"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(1).toString(), QString("ran"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(1).toString(), QString("dropped_restart"));
+}
+
+void TestRepository::everyOutcomeRoundTripsThroughItsStorageString_data()
+{
+    QTest::addColumn<int>("outcome");
+    QTest::addColumn<QString>("stored");
+
+    QTest::newRow("queued")            << static_cast<int>(FiredInstant::Outcome::Queued)           << QString("queued");
+    QTest::newRow("dropped_stop")      << static_cast<int>(FiredInstant::Outcome::DroppedStop)      << QString("dropped_stop");
+    QTest::newRow("dropped_restart")   << static_cast<int>(FiredInstant::Outcome::DroppedRestart)   << QString("dropped_restart");
+    QTest::newRow("skipped_duplicate") << static_cast<int>(FiredInstant::Outcome::SkippedDuplicate) << QString("skipped_duplicate");
+    QTest::newRow("skipped_disabled")  << static_cast<int>(FiredInstant::Outcome::SkippedDisabled)  << QString("skipped_disabled");
+    QTest::newRow("skipped_busy")      << static_cast<int>(FiredInstant::Outcome::SkippedBusy)      << QString("skipped_busy");
+}
+
+void TestRepository::everyOutcomeRoundTripsThroughItsStorageString()
+{
+    QFETCH(int, outcome);
+    QFETCH(QString, stored);
+
+    const FiredInstant::Outcome value = static_cast<FiredInstant::Outcome>(outcome);
+    QCOMPARE(FiredInstant::outcomeToString(value), stored);
+    QCOMPARE(FiredInstant::outcomeFromString(stored), value);
 }
 
 QTEST_MAIN(TestRepository)
