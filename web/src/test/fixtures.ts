@@ -17,8 +17,10 @@ export const zoneFixtures: Zone[] = [
 ]
 
 export const idleStatus: Status = {
-  runningZone: 0,
-  secondsRemaining: 0,
+  running: [],
+  program: null,
+  queue: [],
+  maxConcurrentZones: 2,
   nextRunUtc: '2026-09-14T13:00:00Z',
   timezone: 'America/Los_Angeles',
   masterEnabled: true,
@@ -27,8 +29,7 @@ export const idleStatus: Status = {
 
 export const runningStatus: Status = {
   ...idleStatus,
-  runningZone: 3,
-  secondsRemaining: 120,
+  running: [{ zone: 3, secondsRemaining: 120, source: 'manual' }],
 }
 
 export const morningProgram: Program = {

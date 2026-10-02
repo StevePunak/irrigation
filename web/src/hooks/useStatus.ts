@@ -15,7 +15,9 @@ export interface StatusState {
 }
 
 function intervalFor(status: Status | null): number {
-  return status !== null && status.runningZone > 0 ? RUNNING_POLL_MS : IDLE_POLL_MS
+  const active =
+    status !== null && (status.running.length > 0 || status.program !== null || status.queue.length > 0)
+  return active ? RUNNING_POLL_MS : IDLE_POLL_MS
 }
 
 export function useStatus(): StatusState {

@@ -44,11 +44,14 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
   }
 
   if (response.ok === false) {
+    const record =
+      typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : null
     const detail =
-      typeof payload === 'object' && payload !== null && typeof (payload as Record<string, unknown>)['error'] === 'string'
-        ? ((payload as Record<string, unknown>)['error'] as string)
+      record !== null && typeof record['error'] === 'string'
+        ? (record['error'] as string)
         : `${response.status} ${response.statusText}`
-    throw new ApiError(response.status, detail)
+    const reason = record !== null && typeof record['reason'] === 'string' ? (record['reason'] as string) : null
+    throw new ApiError(response.status, detail, reason)
   }
 
   return payload
@@ -68,6 +71,11 @@ export async function putZone(zone: Zone, patch: { name: string; enabled: boolea
 
 export async function runZone(zone: Zone, seconds: number): Promise<void> {
   await request(`/zones/${zone.number}/run`, { method: 'POST', body: { seconds } })
+}
+
+/** Closes one valve. Addressed by zone number, the identifier `/api/status` reports. */
+export async function stopZone(zoneNumber: number): Promise<void> {
+  await request(`/zones/${zoneNumber}/stop`, { method: 'POST' })
 }
 
 export async function getPrograms(): Promise<Program[]> {

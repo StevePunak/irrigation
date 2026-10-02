@@ -5,6 +5,9 @@ import {
   type Program,
   type ProgramStartTime,
   type ProgramZone,
+  type QueuedProgram,
+  type RunningProgram,
+  type RunningZone,
   type SettingsMap,
   type Status,
   type Zone,
@@ -68,11 +71,63 @@ function dayMode(source: Record<string, unknown>, field: string): DayMode {
   return value as DayMode
 }
 
+function numbers(value: unknown, field: string): number[] {
+  return asArray(value, field).map((element, index) => {
+    if (typeof element !== 'number' || Number.isFinite(element) === false) {
+      throw new DecodeError(`${field}[${index}]`, `expected a number, received ${typeof element}`)
+    }
+    return element
+  })
+}
+
+function decodeRunningZone(element: unknown, field: string): RunningZone {
+  const source = asRecord(element, field)
+  const runSource = str(source, 'source', field)
+  if (runSource !== 'program' && runSource !== 'manual') {
+    throw new DecodeError(`${field}.source`, `unknown source "${runSource}"`)
+  }
+  return {
+    zone: num(source, 'zone', field),
+    secondsRemaining: num(source, 'secondsRemaining', field),
+    source: runSource,
+  }
+}
+
+/** The daemon sends null when no program runs; an absent key is a contract break. */
+function decodeRunningProgram(value: unknown, field: string): RunningProgram | null {
+  if (value === null) {
+    return null
+  }
+  const source = asRecord(value, field)
+  return {
+    id: num(source, 'id', field),
+    name: str(source, 'name', field),
+    step: num(source, 'step', field),
+    stepCount: num(source, 'stepCount', field),
+    waitingZones: numbers(source['waitingZones'], `${field}.waitingZones`),
+  }
+}
+
+function decodeQueuedProgram(element: unknown, field: string): QueuedProgram {
+  const source = asRecord(element, field)
+  return {
+    programId: num(source, 'programId', field),
+    name: str(source, 'name', field),
+    queuedAtUtc: instant(source, 'queuedAtUtc', field),
+  }
+}
+
 export function decodeStatus(payload: unknown): Status {
   const source = asRecord(payload, 'status')
   return {
-    runningZone: num(source, 'runningZone', 'status'),
-    secondsRemaining: num(source, 'secondsRemaining', 'status'),
+    running: asArray(source['running'], 'status.running').map((element, index) =>
+      decodeRunningZone(element, `status.running[${index}]`),
+    ),
+    program: decodeRunningProgram(source['program'], 'status.program'),
+    queue: asArray(source['queue'], 'status.queue').map((element, index) =>
+      decodeQueuedProgram(element, `status.queue[${index}]`),
+    ),
+    maxConcurrentZones: num(source, 'maxConcurrentZones', 'status'),
     nextRunUtc: instant(source, 'nextRunUtc', 'status'),
     timezone: str(source, 'timezone', 'status'),
     masterEnabled: bool(source, 'masterEnabled', 'status'),

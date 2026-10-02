@@ -122,7 +122,7 @@ describe('useStatus', () => {
       await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS)
     })
 
-    expect(result.current.status?.runningZone).toBe(3)
+    expect(result.current.status?.running[0]?.zone).toBe(3)
     expect(result.current.stale).toBe(true)
     expect(result.current.error).toMatch(/Failed to fetch/)
   })
@@ -171,7 +171,7 @@ describe('useStatus', () => {
 
     expect(result.current.error).toBeNull()
     expect(result.current.stale).toBe(false)
-    expect(result.current.status?.runningZone).toBe(0)
+    expect(result.current.status?.running).toEqual([])
   })
 
   it('keeps polling after a failure', async () => {

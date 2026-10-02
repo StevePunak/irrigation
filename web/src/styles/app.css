@@ -127,8 +127,7 @@ option {
 
 .running {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  flex-direction: column;
   gap: var(--gap);
   padding: var(--gap);
   border: 1px solid var(--glass-edge);
@@ -147,6 +146,70 @@ option {
 
 .running__unknown {
   color: var(--warn);
+}
+
+.running-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.running-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'zone tag'
+    'clock stop';
+  align-items: center;
+  gap: 6px var(--gap);
+}
+
+.running-row__zone {
+  grid-area: zone;
+}
+
+.running-row__tag {
+  grid-area: tag;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--glass-edge);
+  color: var(--ink-dim);
+}
+
+.running-row__tag--program {
+  border-color: var(--running);
+  color: var(--running);
+}
+
+.running-row .running__clock {
+  grid-area: clock;
+}
+
+.running-row__stop {
+  grid-area: stop;
+  min-height: var(--touch);
+  background: var(--danger);
+  color: var(--danger-ink);
+  font-weight: 800;
+}
+
+.program-line,
+.queue-line {
+  font-size: 1rem;
+  color: var(--ink-dim);
+}
+
+.cap-hint {
+  margin: 0;
+  color: var(--warn);
+  font-weight: 700;
 }
 
 .stop {
