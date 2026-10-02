@@ -30,7 +30,7 @@ public:
     /** @brief Constructs a runner driving @p controller from steps read through @p source. */
     ProgramRunner(ZoneController* controller, IrrigationDataSource* source, QObject* parent = nullptr);
 
-    /** @brief Starts @p programId at its first step. @return False when a program is already running or an open in the first step failed. */
+    /** @brief Starts @p programId at its first step. @return False when a program is already running, its steps could not be read, or an open in the first step failed. */
     bool startProgram(int programId);
 
     /** @brief Stops the running program and closes the zones it opened. Zones opened by anything else stay open. */
@@ -61,7 +61,7 @@ public:
     void fillSlots();
 
 public slots:
-    /** @brief Fills freed slots after a deadline or a per-zone stop; aborts the program on an all-off or watchdog close of one of its open or waiting zones. */
+    /** @brief Fills freed slots after a deadline or a per-zone stop; aborts the program on any all-off or watchdog close. */
     void onZoneClosed(int zoneNumber, ZoneController::CloseReason reason);
 
     /** @brief Stops the running program when the controller's watchdog trips. */
@@ -74,7 +74,7 @@ signals:
     /** @brief Emitted after @p programId's last step has completed. */
     void programFinished(int programId);
 
-    /** @brief Emitted when @p programId is stopped before finishing, by abort(), a failed zone open, an all-off, or a watchdog trip. */
+    /** @brief Emitted when @p programId is stopped before finishing, by abort(), a failed step read, a failed zone open, an all-off, or a watchdog trip. */
     void programAborted(int programId);
 
 private:

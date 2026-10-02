@@ -4,6 +4,8 @@
 #include "model/program.h"
 #include "model/zone.h"
 
+#include <QMetaEnum>
+
 #include <algorithm>
 
 ProgramRunner::ProgramRunner(ZoneController* controller, IrrigationDataSource* source, QObject* parent) :
@@ -22,7 +24,8 @@ bool ProgramRunner::startProgram(int programId)
         return false;
     }
 
-    _steps = _source->stepsFor(programId);
+    bool ok = false;
+    _steps = _source->stepsFor(programId, &ok);
     _programName.clear();
     const ProgramList programs = _source->allPrograms();
     for(const Program& program : programs) {
@@ -38,9 +41,15 @@ bool ProgramRunner::startProgram(int programId)
     _openZones.clear();
     _running = true;
 
-    logText(LVL_INFO, QString("Program %1 '%2' starts with %3 steps").arg(programId).arg(_programName).arg(_steps.count()));
     emit programStarted(programId);
 
+    if(ok == false) {
+        logText(LVL_ERROR, QString("Program %1 could not read its steps").arg(programId));
+        stopRunning();
+        return false;
+    }
+
+    logText(LVL_INFO, QString("Program %1 '%2' starts with %3 steps").arg(programId).arg(_programName).arg(_steps.count()));
     return advance();
 }
 
@@ -195,11 +204,10 @@ void ProgramRunner::onZoneClosed(int zoneNumber, ZoneController::CloseReason rea
     }
 
     if(reason == ZoneController::CloseReason::AllOff || reason == ZoneController::CloseReason::Watchdog) {
-        if(_openZones.contains(zoneNumber) || _waiting.contains(zoneNumber)) {
-            logText(LVL_WARNING, QString("Zone %1 of program %2 was closed by an all-off; aborting")
-                                     .arg(zoneNumber).arg(_programId));
-            stopRunning();
-        }
+        const char* reasonName = QMetaEnum::fromType<ZoneController::CloseReason>().valueToKey(static_cast<int>(reason));
+        logText(LVL_WARNING, QString("A bank-wide %1 close landed on zone %2; aborting program %3")
+                                 .arg(reasonName).arg(zoneNumber).arg(_programId));
+        stopRunning();
         return;
     }
 
