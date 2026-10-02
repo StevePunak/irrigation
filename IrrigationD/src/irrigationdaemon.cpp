@@ -305,7 +305,12 @@ void IrrigationDaemon::onProgramRunRequested(int programId, const RunRequestPtr&
             message = "that program is already running or queued";
         }
         else if(refusal == RunRequest::Refusal::Failed) {
-            message = QString("program %1 failed to start: %2").arg(programId).arg(_zoneController->errorText());
+            if(_zoneController->isFaulted()) {
+                message = QString("program %1 failed to start: %2").arg(programId).arg(_zoneController->errorText());
+            }
+            else {
+                message = QString("program %1 could not start").arg(programId);
+            }
         }
     }
 

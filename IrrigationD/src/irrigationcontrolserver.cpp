@@ -366,8 +366,16 @@ QHttpServerResponse IrrigationControlServer::handleProgramsGet(const QHttpServer
     QJsonArray array;
     const ProgramList programs = _source->allPrograms();
     for(const Program& program : programs) {
-        const ProgramStartTimeList startTimes = _source->startTimesFor(program.id);
-        const ProgramStepList steps = _source->stepsFor(program.id);
+        bool ok = true;
+        const ProgramStartTimeList startTimes = _source->startTimesFor(program.id, &ok);
+        ProgramStepList steps;
+        if(ok) {
+            steps = _source->stepsFor(program.id, &ok);
+        }
+        if(ok == false) {
+            return QHttpServerResponse(QJsonObject{{"error", "failed to read programs"}},
+                                       QHttpServerResponder::StatusCode::InternalServerError);
+        }
         const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, nowUtc);
         array.append(ProgramJson::toJson(program, startTimes, steps, nextRunUtc));
     }

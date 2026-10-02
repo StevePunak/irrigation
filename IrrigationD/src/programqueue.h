@@ -23,8 +23,9 @@ class ProgramRunner;
  * entry each time the runner falls idle.
  *
  * @warning An aborted program hands the runner to the next queued entry, which opens
- *          valves. Call dropAll() before aborting the runner on a stop, and delete this
- *          object before aborting the runner during teardown.
+ *          valves. Any allOff() caller must empty this queue first -- dropAll() before
+ *          aborting the runner, or delete this object before aborting the runner during
+ *          teardown.
  */
 class ProgramQueue : public QObject,
                      public LoggingBaseClass
@@ -35,10 +36,10 @@ public:
     class Entry
     {
     public:
-        int programId = 0;
-        int startTimeId = 0;
-        QDateTime scheduledAtUtc;
-        QDateTime queuedAtUtc;
+        int programId = 0; ///< The program to run.
+        int startTimeId = 0; ///< The start time that fired this entry, zero for a manual run.
+        QDateTime scheduledAtUtc; ///< When the start time fired. Invalid for a manual run.
+        QDateTime queuedAtUtc; ///< When this entry joined the queue.
 
         /** @brief Returns true for an entry a start time produced, false for a manual run. */
         bool isScheduled() const { return startTimeId > 0; }

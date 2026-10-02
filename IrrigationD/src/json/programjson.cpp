@@ -149,6 +149,11 @@ bool ProgramJson::fromJson(const QJsonObject& object,
 
     ProgramStepList parsedSteps;
     const QJsonArray stepsArray = object.value("steps").toArray();
+    if(stepsArray.isEmpty()) {
+        errorMessage = "a program needs at least one step";
+        return false;
+    }
+
     for(const QJsonValue& value : stepsArray) {
         if(value.isObject() == false) {
             errorMessage = "each step must be an object";
