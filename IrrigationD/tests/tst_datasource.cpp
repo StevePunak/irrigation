@@ -206,6 +206,11 @@ void TestDataSource::migratesProgramZonesIntoOneZoneSteps()
         // so program 40's steps come back in the reverse of their id order.
         QVERIFY(query.exec("INSERT INTO program_zones (id, program_id, zone_id, sequence, duration_seconds) VALUES "
                            "(70, 40, 3, 2, 300), (71, 40, 6, 1, 600), (72, 41, 8, 1, 900)"));
+        // 80 names a real program but zone 99 does not exist; 81 names zone 3 but program 999
+        // does not exist. This raw connection never enables foreign key checking, so both
+        // orphans insert cleanly, the same as a database that outlived a deleted row.
+        QVERIFY(query.exec("INSERT INTO program_zones (id, program_id, zone_id, sequence, duration_seconds) VALUES "
+                           "(80, 40, 99, 3, 111), (81, 999, 3, 4, 222)"));
         seed.close();
     }
     QSqlDatabase::removeDatabase("seed-steps-connection");
@@ -236,6 +241,20 @@ void TestDataSource::migratesProgramZonesIntoOneZoneSteps()
 
     QSqlQuery query(QSqlDatabase::database(source.connectionName()));
     QVERIFY(query.exec("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'program_zones'"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+
+    // Orphans 80 (zone 99) and 81 (program 999) must not have become a step, under any
+    // program, and no step's zone row names the nonexistent zone.
+    QVERIFY(query.exec("SELECT COUNT(*) FROM program_steps"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 3);
+
+    QVERIFY(query.exec("SELECT COUNT(*) FROM program_steps WHERE id IN (80, 81)"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+
+    QVERIFY(query.exec("SELECT COUNT(*) FROM program_step_zones WHERE zone_id = 99"));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 0);
 

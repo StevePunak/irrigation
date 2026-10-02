@@ -223,6 +223,13 @@ void TestProgramQueue::aRunningProgramMayHoldOneQueuedEntry()
     QCOMPARE(queue.entries().count(), 1);
     QCOMPARE(rig.outcomeFor(programId, 32), QString("queued"));
 
+    // A third due time while the program is both running and already queued: one
+    // queued entry is already the most this program may hold.
+    QVERIFY(rig.insertQueuedFiring(programId, 33, DueAt.addSecs(600)));
+    queue.enqueueScheduled(programId, 33, DueAt.addSecs(600));
+    QCOMPARE(queue.entries().count(), 1);
+    QCOMPARE(rig.outcomeFor(programId, 33), QString("skipped_duplicate"));
+
     QSignalSpy started(&runner, &ProgramRunner::programStarted);
     controller.expireCloseTimerForTest(1);
 
@@ -311,7 +318,9 @@ void TestProgramQueue::masterDisabledWhileWaitingSkipsAtDequeue()
     controller.expireCloseTimerForTest(1);
 
     QVERIFY(runner.isRunning() == false);
+    QVERIFY(controller.openZoneNumbers().isEmpty());
     QCOMPARE(rig.outcomeFor(second, 32), QString("skipped_disabled"));
+    QVERIFY(queue.entries().isEmpty());
 }
 
 void TestProgramQueue::manualEntryIgnoresTheRainDelayAtDequeue()

@@ -748,7 +748,11 @@ void TestRepository::everyOutcomeRoundTripsThroughItsStorageString_data()
     QTest::addColumn<int>("outcome");
     QTest::addColumn<QString>("stored");
 
+    QTest::newRow("ran")               << static_cast<int>(FiredInstant::Outcome::Ran)              << QString("ran");
     QTest::newRow("queued")            << static_cast<int>(FiredInstant::Outcome::Queued)           << QString("queued");
+    QTest::newRow("skipped_rain")      << static_cast<int>(FiredInstant::Outcome::SkippedRain)      << QString("skipped_rain");
+    QTest::newRow("skipped_stop")      << static_cast<int>(FiredInstant::Outcome::SkippedStop)      << QString("skipped_stop");
+    QTest::newRow("failed")            << static_cast<int>(FiredInstant::Outcome::Failed)           << QString("failed");
     QTest::newRow("dropped_stop")      << static_cast<int>(FiredInstant::Outcome::DroppedStop)      << QString("dropped_stop");
     QTest::newRow("dropped_restart")   << static_cast<int>(FiredInstant::Outcome::DroppedRestart)   << QString("dropped_restart");
     QTest::newRow("skipped_duplicate") << static_cast<int>(FiredInstant::Outcome::SkippedDuplicate) << QString("skipped_duplicate");
