@@ -343,13 +343,13 @@ invariants regardless of caller:
    ceiling.
 4. **Watchdog.** A periodic tick reads the bank back and compares it with the
    expected *set* of open zones. A zone found past its deadline with its close
-   timer still armed is closed through the normal deadline path rather than
-   treated as a trip, so a coarse event-loop stall between the timer's firing
-   and the watchdog's tick does not read as a fault. The watchdog trips —
-   closes the bank and latches a fault that refuses every open until a later
-   tick reads back exactly the expected set with no zone open — for a zone
-   past its deadline with no close timer armed, a line that differs from the
-   expected set, or a failed read-back.
+   timer still armed is closed through the normal deadline path, so a coarse
+   event-loop stall between the timer's firing and the watchdog's tick does
+   not read as a fault. The watchdog trips — closes the bank and latches a
+   fault that refuses every open until a later tick reads back exactly the
+   expected set with no zone open — for a zone past its deadline with no
+   close timer armed, a line that differs from the expected set, or a failed
+   read-back.
 5. **Count check.** The watchdog also trips if more lines read back asserted
    than the cap in force when the open zones were opened.
 
@@ -358,7 +358,7 @@ retry lands; it cannot be re-opened, and every later bank write — another
 zone's open, another zone's close, the zone's own retried close — carries it
 as inactive, so it goes dark the next time anything touches the bank. No zone
 can open while an all-off or watchdog close is itself pending a retry; a
-failed all-off retries as a single bank write rather than per zone.
+failed all-off retries every zone together in a single bank write.
 
 The read-back uses `IGpioBackend::getValues()` through `OutputBank::readValues()`;
 `InputPin::isAsserted()` gives the STOP button its level at startup.
@@ -466,7 +466,7 @@ close signal, so timing has a single authority.
   step. While a program is running, an all-off or watchdog close aborts it.
 - A program's steps are read once, at start. A read failure, or a failed open
   in the first step, aborts the program before `ProgramQueue` records the
-  firing — it is recorded `failed`, never `ran`.
+  firing, so the firing is recorded `failed`.
 
 One program runs at a time. `ProgramQueue` holds the rest, first in, first out,
 at most one entry per program; a running program may hold one queued entry. A
@@ -598,11 +598,13 @@ Three screens:
 
 - **Now** — one row per open zone with its countdown, a program/manual tag and
   its own Stop; the running program's step and waiting zones; the queued
-  programs; the next scheduled run; eight zone tiles with a quick manual run,
-  every open tile glowing and Run disabled on the others at the cap with an
-  "N of N running" hint; a refused run shows the daemon's reason; and a
-  prominent stop control. Mobile-first with large touch targets and high
-  contrast for outdoor readability.
+  programs; the next scheduled run; eight zone tiles, each glowing while open
+  with its button reading Stop and closing that zone — always enabled, even
+  at the cap; a closed tile's button reads Run, for a quick manual open, and
+  is disabled on the others at the cap with an "N of N running" hint; a
+  refused run shows the daemon's reason; and a prominent stop control.
+  Mobile-first with large touch targets and high contrast for outdoor
+  readability.
 - **Programs** — list, create, edit. Day rule, start times, ordered steps of
   zone chips with one duration each, a "runs in waves" warning on a step with
   more zones than the cap, computed total runtime assuming waves, next run.
