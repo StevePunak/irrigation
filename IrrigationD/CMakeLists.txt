@@ -29,7 +29,6 @@ qt_add_executable(${PROJ}
     src/model/zone.h              src/model/zone.cpp
     src/model/program.h           src/model/program.cpp
     src/model/programstarttime.h  src/model/programstarttime.cpp
-    src/model/programzone.h       src/model/programzone.cpp
     src/model/programstep.h       src/model/programstep.cpp
     src/model/firedinstant.h      src/model/firedinstant.cpp
 )

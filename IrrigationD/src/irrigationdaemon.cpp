@@ -188,6 +188,8 @@ void IrrigationDaemon::connectComponents()
             this, &IrrigationDaemon::onManualZoneRunRequested);
     connect(_controlServer, &IrrigationControlServer::programRunRequested,
             this, &IrrigationDaemon::onProgramRunRequested);
+    connect(_controlServer, &IrrigationControlServer::zoneStopRequested,
+            this, &IrrigationDaemon::onZoneStopRequested);
     connect(_controlServer, &IrrigationControlServer::settingsChanged,
             this, &IrrigationDaemon::onSettingsChanged);
     connect(_statusTimer, &QTimer::timeout, this, &IrrigationDaemon::publishStatus);
@@ -195,6 +197,10 @@ void IrrigationDaemon::connectComponents()
 
 void IrrigationDaemon::onStopPressed()
 {
+    if(isTornDown()) {
+        return;
+    }
+
     logText(LVL_WARNING, "Stop requested");
 
     // dropAll() precedes abort(): an aborted program starts the next queued one.
@@ -211,6 +217,10 @@ void IrrigationDaemon::onStopPressed()
 
 void IrrigationDaemon::onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc)
 {
+    if(isTornDown()) {
+        return;
+    }
+
     if(_stopButton->isHeld()) {
         logText(LVL_WARNING, QString("Program %1 came due while the stop button is held").arg(programId));
         if(_dataSource->setFiringOutcome(programId, startTimeId, scheduledAtUtc, FiredInstant::Outcome::SkippedStop) == false) {
@@ -224,51 +234,110 @@ void IrrigationDaemon::onProgramDue(int programId, int startTimeId, const QDateT
     publishStatus();
 }
 
-void IrrigationDaemon::onManualZoneRunRequested(int zoneNumber, int seconds)
+void IrrigationDaemon::onManualZoneRunRequested(int zoneNumber, int seconds, const RunRequestPtr& decision)
 {
+    if(isTornDown()) {
+        decision->complete(RunRequest::Refusal::Failed, "the controller is shutting down");
+        return;
+    }
+
+    RunRequest::Refusal refusal = RunRequest::Refusal::None;
+    QString message;
+
     if(_stopButton->isHeld()) {
         logText(LVL_WARNING, QString("Refused a manual run of zone %1: the stop button is held").arg(zoneNumber));
+        refusal = RunRequest::Refusal::StopHeld;
+        message = "the stop button is held";
     }
     else if(_dataSource->isMasterEnabled() == false) {
         logText(LVL_WARNING, QString("Refused a manual run of zone %1: the master enable is off").arg(zoneNumber));
+        refusal = RunRequest::Refusal::MasterDisabled;
+        message = "watering is turned off";
     }
     else if(isZoneEnabled(zoneNumber) == false) {
         logText(LVL_WARNING, QString("Refused a manual run of zone %1: the zone is disabled or has no database row").arg(zoneNumber));
+        refusal = RunRequest::Refusal::ZoneDisabled;
+        message = QString("zone %1 is disabled").arg(zoneNumber);
     }
-    else {
-        _programRunner->abort();
-
-        if(_zoneController->openZone(zoneNumber, seconds) == false) {
-            logText(LVL_ERROR, QString("Failed to open zone %1 for %2 seconds: %3")
-                                   .arg(zoneNumber).arg(seconds).arg(_zoneController->errorText()));
-        }
-
-        publishStatus();
+    else if(_zoneController->hasSlotFor(zoneNumber) == false) {
+        const int open = static_cast<int>(_zoneController->openZoneNumbers().count());
+        logText(LVL_WARNING, QString("Refused a manual run of zone %1: %2 zones already running").arg(zoneNumber).arg(open));
+        refusal = RunRequest::Refusal::CapReached;
+        message = QString("%1 zones already running").arg(open);
     }
+    else if(_zoneController->openZone(zoneNumber, seconds) == false) {
+        logText(LVL_ERROR, QString("Failed to open zone %1 for %2 seconds: %3")
+                               .arg(zoneNumber).arg(seconds).arg(_zoneController->errorText()));
+        refusal = RunRequest::Refusal::Failed;
+        message = _zoneController->errorText();
+    }
+
+    // publishStatus() precedes complete(): the snapshot then reaches the server thread
+    // ahead of the reply, so the poll a client fires on the reply already sees the change.
+    publishStatus();
+    decision->complete(refusal, message);
 }
 
-void IrrigationDaemon::onProgramRunRequested(int programId)
+void IrrigationDaemon::onProgramRunRequested(int programId, const RunRequestPtr& decision)
 {
+    if(isTornDown()) {
+        decision->complete(RunRequest::Refusal::Failed, "the controller is shutting down");
+        return;
+    }
+
+    RunRequest::Refusal refusal = RunRequest::Refusal::None;
+    QString message;
+
     if(_stopButton->isHeld()) {
         logText(LVL_WARNING, QString("Refused a manual run of program %1: the stop button is held").arg(programId));
+        refusal = RunRequest::Refusal::StopHeld;
+        message = "the stop button is held";
     }
     else if(_dataSource->isMasterEnabled() == false) {
         logText(LVL_WARNING, QString("Refused a manual run of program %1: the master enable is off").arg(programId));
+        refusal = RunRequest::Refusal::MasterDisabled;
+        message = "watering is turned off";
     }
     else {
-        const RunRequest::Refusal refusal = _programQueue->enqueueManual(programId);
-        if(refusal != RunRequest::Refusal::None) {
-            logText(LVL_WARNING, QString("Refused a manual run of program %1: %2")
-                                     .arg(programId).arg(RunRequest::refusalToString(refusal)));
+        refusal = _programQueue->enqueueManual(programId);
+        if(refusal == RunRequest::Refusal::AlreadyQueued) {
+            logText(LVL_WARNING, QString("Refused a manual run of program %1: it is already running or queued").arg(programId));
+            message = "that program is already running or queued";
         }
-
-        publishStatus();
+        else if(refusal == RunRequest::Refusal::Failed) {
+            message = QString("program %1 failed to start: %2").arg(programId).arg(_zoneController->errorText());
+        }
     }
+
+    // publishStatus() precedes complete(): the snapshot then reaches the server thread
+    // ahead of the reply, so the poll a client fires on the reply already sees the change.
+    publishStatus();
+    decision->complete(refusal, message);
+}
+
+void IrrigationDaemon::onZoneStopRequested(int zoneNumber)
+{
+    if(isTornDown()) {
+        return;
+    }
+
+    logText(LVL_INFO, QString("Stop requested for zone %1").arg(zoneNumber));
+    if(_zoneController->closeZone(zoneNumber) == false) {
+        logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(_zoneController->errorText()));
+    }
+
+    publishStatus();
 }
 
 void IrrigationDaemon::onSettingsChanged()
 {
+    if(isTornDown()) {
+        return;
+    }
+
     applyRuntimeSettings();
+    _programRunner->fillSlots();
+    publishStatus();
 }
 
 void IrrigationDaemon::applyRuntimeSettings()

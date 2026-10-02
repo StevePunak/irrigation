@@ -3,8 +3,9 @@
 
 #include "model/program.h"
 #include "model/programstarttime.h"
-#include "model/programzone.h"
+#include "model/programstep.h"
 #include "model/zone.h"
+#include "runrequest.h"
 
 #include <Kanoop/mutexevent.h>
 #include <Kanoop/timespan.h>
@@ -69,7 +70,8 @@ Q_DECLARE_METATYPE(ServerStatus)
  *
  * Every route lives under the admin prefix; nginx proxies the public API prefix to
  * it. No route touches GPIO directly -- state-changing routes emit a request signal
- * and let the daemon's owner of ZoneController and ProgramRunner act on it.
+ * and let the daemon's owner of ZoneController and ProgramRunner act on it. Run
+ * routes wait for that owner's decision.
  *
  * @warning Owns its own IrrigationDataSource, opened in threadStarted() on the worker
  *          thread. A QSqlDatabase connection cannot be shared across threads, so this
@@ -91,6 +93,9 @@ public:
     /** @brief Sets the port the listener binds to. Zero picks an ephemeral port. Call before start(). */
     void setListenPort(int value) { _listenPort = value; }
 
+    /** @brief Sets how long a run route waits for the valve thread's decision before answering 503. Call before start(). */
+    void setDecisionTimeout(const TimeSpan& value) { _decisionTimeout = value; }
+
     /** @brief Publishes a new status snapshot for GET /admin/status to serve. Safe to call from any thread. */
     void updateStatus(const ServerStatus& status) { emit statusUpdateRequested(status); }
 
@@ -104,11 +109,22 @@ public:
     virtual void abort() override;
 
 signals:
-    /** @brief Emitted when POST /admin/zones/{number}/run is accepted. */
-    void manualZoneRunRequested(int zoneNumber, int seconds);
+    /**
+     * @brief Emitted when POST /admin/zones/{number}/run passes validation.
+     *
+     * The route blocks until a slot calls @p decision's complete(), or until the decision timeout.
+     */
+    void manualZoneRunRequested(int zoneNumber, int seconds, const RunRequestPtr& decision);
 
-    /** @brief Emitted when POST /admin/programs/{id}/run is accepted. */
-    void programRunRequested(int programId);
+    /**
+     * @brief Emitted when POST /admin/programs/{id}/run names a known program.
+     *
+     * The route blocks until a slot calls @p decision's complete(), or until the decision timeout.
+     */
+    void programRunRequested(int programId, const RunRequestPtr& decision);
+
+    /** @brief Emitted when POST /admin/zones/{number}/stop names a known zone. */
+    void zoneStopRequested(int zoneNumber);
 
     /** @brief Emitted when POST /admin/stop is accepted. */
     void stopRequested();
@@ -131,6 +147,7 @@ private:
     QHttpServerResponse handleZonesGet(const QHttpServerRequest& request);
     QHttpServerResponse handleZonePut(int zoneNumber, const QHttpServerRequest& request);
     QHttpServerResponse handleZoneRun(int zoneNumber, const QHttpServerRequest& request);
+    QHttpServerResponse handleZoneStop(int zoneNumber, const QHttpServerRequest& request);
     QHttpServerResponse handleProgramsGet(const QHttpServerRequest& request);
     QHttpServerResponse handleProgramPost(const QHttpServerRequest& request);
     QHttpServerResponse handleProgramPut(int programId, const QHttpServerRequest& request);
@@ -139,11 +156,12 @@ private:
     QHttpServerResponse handleStop(const QHttpServerRequest& request);
     QHttpServerResponse handleSettingsGet(const QHttpServerRequest& request);
     QHttpServerResponse handleSettingsPut(const QHttpServerRequest& request);
+    QHttpServerResponse decisionResponse(const RunRequestPtr& decision);
 
     static QJsonObject zoneToJson(const Zone& zone);
 
-    /** @brief Returns whether every zone.zoneId in @p zones names a row present in @p knownZones. */
-    static bool zoneIdsAreKnown(const ProgramZoneList& zones, const ZoneList& knownZones);
+    /** @brief Returns whether every zone id in every step of @p steps names a row present in @p knownZones. */
+    static bool zoneIdsAreKnown(const ProgramStepList& steps, const ZoneList& knownZones);
 
     /** @brief Returns whether @p value is a legal value for the settings key @p key. */
     static bool isValidSettingValue(const QString& key, const QString& value);
@@ -166,10 +184,12 @@ private:
     bool reconcileStartTimes(int programId, ProgramStartTimeList& startTimes);
 
     static const QStringList SettingsKeys;
+    static const TimeSpan DefaultDecisionTimeout;
 
     QString _databasePath;
     QString _bindAddress;
     int _listenPort;
+    TimeSpan _decisionTimeout;
     IrrigationDataSource* _source = nullptr;
     QHttpServer* _httpServer = nullptr;
     QTcpServer* _tcpServer = nullptr;

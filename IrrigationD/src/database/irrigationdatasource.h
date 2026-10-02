@@ -11,7 +11,6 @@
 #include "model/program.h"
 #include "model/programstarttime.h"
 #include "model/programstep.h"
-#include "model/programzone.h"
 #include "model/zone.h"
 
 /**
@@ -73,15 +72,6 @@ public:
 
     /** @brief Deletes the start time @p startTimeId. @return True on success. */
     bool deleteStartTime(int startTimeId);
-
-    /** @brief Returns the zones belonging to @p programId, ordered by sequence. */
-    ProgramZoneList zonesFor(int programId);
-
-    /** @brief Inserts @p programZone and writes the generated id back into it. @return True on success. */
-    bool insertProgramZone(ProgramZone& programZone);
-
-    /** @brief Deletes every zone entry belonging to @p programId. @return True on success. */
-    bool deleteProgramZones(int programId);
 
     /**
      * @brief Returns the steps belonging to @p programId, ordered by sequence then id, each with its zone ids.

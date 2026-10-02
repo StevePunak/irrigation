@@ -14,7 +14,6 @@ private slots:
     void insertProgramAssignsTheId();
     void deleteProgramCascades();
     void prunePreservesRecentRows();
-    void programZonesRoundTripInSequenceOrder();
     void startTimeRoundTripsAllFields();
     void updateZoneChangesNameAndEnabled();
     void updateZoneLandsCorrectlyWhenNumberDiffersFromId();
@@ -27,7 +26,6 @@ private slots:
     void deleteStartTimeRemovesOnlyThatRow();
     void startTimesForReportsSuccessInAscendingIdOrder();
     void startTimesForReportsFailureWhenTheReadFails();
-    void deleteProgramZonesLeavesOtherProgramsIntact();
     void isMasterEnabledOnlyExactZeroDisables_data();
     void isMasterEnabledOnlyExactZeroDisables();
     void isMasterEnabledDefaultsToEnabledWhenAbsent();
@@ -147,60 +145,6 @@ void TestRepository::prunePreservesRecentRows()
 
     QVERIFY(source.hasFired(program.id, old.startTimeId, old.scheduledAtUtc) == false);
     QVERIFY(source.hasFired(program.id, recent.startTimeId, recent.scheduledAtUtc));
-}
-
-void TestRepository::programZonesRoundTripInSequenceOrder()
-{
-    QTemporaryDir dir;
-    IrrigationDataSource source(dir.filePath("irrigation.db"));
-    QVERIFY(source.open());
-
-    Program program;
-    program.name = "Backyard";
-    QVERIFY(source.insertProgram(program));
-
-    // Insert out of sequence order; zonesFor() must still come back ordered by sequence.
-    // zoneId/sequence are kept clear of programId (1 in a fresh database) and of each
-    // other, so a transposed bind between any two of these int columns is observable.
-    ProgramZone third;
-    third.programId = program.id;
-    third.zoneId = 6;
-    third.sequence = 12;
-    third.durationSeconds = 300;
-    QVERIFY(source.insertProgramZone(third));
-    QVERIFY(third.id > 0);
-
-    ProgramZone first;
-    first.programId = program.id;
-    first.zoneId = 4;
-    first.sequence = 10;
-    first.durationSeconds = 600;
-    QVERIFY(source.insertProgramZone(first));
-
-    ProgramZone second;
-    second.programId = program.id;
-    second.zoneId = 5;
-    second.sequence = 11;
-    second.durationSeconds = 450;
-    QVERIFY(source.insertProgramZone(second));
-
-    ProgramZoneList zones = source.zonesFor(program.id);
-    QCOMPARE(zones.count(), 3);
-    QCOMPARE(zones.at(0).id, first.id);
-    QCOMPARE(zones.at(0).programId, program.id);
-    QCOMPARE(zones.at(0).zoneId, 4);
-    QCOMPARE(zones.at(0).sequence, 10);
-    QCOMPARE(zones.at(0).durationSeconds, 600);
-    QCOMPARE(zones.at(1).id, second.id);
-    QCOMPARE(zones.at(1).programId, program.id);
-    QCOMPARE(zones.at(1).zoneId, 5);
-    QCOMPARE(zones.at(1).sequence, 11);
-    QCOMPARE(zones.at(1).durationSeconds, 450);
-    QCOMPARE(zones.at(2).id, third.id);
-    QCOMPARE(zones.at(2).programId, program.id);
-    QCOMPARE(zones.at(2).zoneId, 6);
-    QCOMPARE(zones.at(2).sequence, 12);
-    QCOMPARE(zones.at(2).durationSeconds, 300);
 }
 
 void TestRepository::startTimeRoundTripsAllFields()
@@ -594,66 +538,6 @@ void TestRepository::startTimesForReportsFailureWhenTheReadFails()
     ProgramStartTimeList startTimes = source.startTimesFor(program.id, &ok);
     QVERIFY(ok == false);
     QVERIFY(startTimes.isEmpty());
-}
-
-void TestRepository::deleteProgramZonesLeavesOtherProgramsIntact()
-{
-    QTemporaryDir dir;
-    IrrigationDataSource source(dir.filePath("irrigation.db"));
-    QVERIFY(source.open());
-
-    Program doomed;
-    doomed.name = "Doomed zones";
-    QVERIFY(source.insertProgram(doomed));
-
-    Program survivor;
-    survivor.name = "Survivor";
-    QVERIFY(source.insertProgram(survivor));
-
-    // Two filler zones on the survivor push doomed's own zone rows past both program ids
-    // (1 and 2).
-    ProgramZone fillerZoneA;
-    fillerZoneA.programId = survivor.id;
-    fillerZoneA.zoneId = 1;
-    fillerZoneA.sequence = 90;
-    fillerZoneA.durationSeconds = 30;
-    QVERIFY(source.insertProgramZone(fillerZoneA));
-
-    ProgramZone fillerZoneB;
-    fillerZoneB.programId = survivor.id;
-    fillerZoneB.zoneId = 2;
-    fillerZoneB.sequence = 91;
-    fillerZoneB.durationSeconds = 30;
-    QVERIFY(source.insertProgramZone(fillerZoneB));
-
-    ProgramZone doomedZoneA;
-    doomedZoneA.programId = doomed.id;
-    doomedZoneA.zoneId = 3;
-    doomedZoneA.sequence = 1;
-    doomedZoneA.durationSeconds = 120;
-    QVERIFY(source.insertProgramZone(doomedZoneA));
-
-    ProgramZone doomedZoneB;
-    doomedZoneB.programId = doomed.id;
-    doomedZoneB.zoneId = 5;
-    doomedZoneB.sequence = 2;
-    doomedZoneB.durationSeconds = 180;
-    QVERIFY(source.insertProgramZone(doomedZoneB));
-
-    ProgramZone survivorZone;
-    survivorZone.programId = survivor.id;
-    survivorZone.zoneId = 4;
-    survivorZone.sequence = 92;
-    survivorZone.durationSeconds = 240;
-    QVERIFY(source.insertProgramZone(survivorZone));
-
-    QCOMPARE(source.zonesFor(doomed.id).count(), 2);
-    QCOMPARE(source.zonesFor(survivor.id).count(), 3);
-
-    QVERIFY(source.deleteProgramZones(doomed.id));
-
-    QCOMPARE(source.zonesFor(doomed.id).count(), 0);
-    QCOMPARE(source.zonesFor(survivor.id).count(), 3);
 }
 
 void TestRepository::isMasterEnabledOnlyExactZeroDisables_data()

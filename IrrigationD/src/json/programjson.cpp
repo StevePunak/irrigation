@@ -10,7 +10,7 @@ const QStringList ProgramJson::ValidDayModeNames = { "DaysOfWeek", "Odd", "Even"
 
 QJsonObject ProgramJson::toJson(const Program& program,
                                 const ProgramStartTimeList& startTimes,
-                                const ProgramZoneList& zones,
+                                const ProgramStepList& steps,
                                 const QDateTime& nextRunUtc)
 {
     QJsonArray startTimesArray;
@@ -18,9 +18,9 @@ QJsonObject ProgramJson::toJson(const Program& program,
         startTimesArray.append(toJson(startTime));
     }
 
-    QJsonArray zonesArray;
-    for(const ProgramZone& zone : zones) {
-        zonesArray.append(toJson(zone));
+    QJsonArray stepsArray;
+    for(const ProgramStep& step : steps) {
+        stepsArray.append(toJson(step));
     }
 
     QJsonObject object;
@@ -32,7 +32,7 @@ QJsonObject ProgramJson::toJson(const Program& program,
     object["intervalDays"] = program.intervalDays;
     object["anchorDate"] = dateToJson(program.anchorDate);
     object["startTimes"] = startTimesArray;
-    object["zones"] = zonesArray;
+    object["steps"] = stepsArray;
     object["nextRunUtc"] = instantToJson(nextRunUtc);
     return object;
 }
@@ -46,20 +46,24 @@ QJsonObject ProgramJson::toJson(const ProgramStartTime& startTime)
     return object;
 }
 
-QJsonObject ProgramJson::toJson(const ProgramZone& zone)
+QJsonObject ProgramJson::toJson(const ProgramStep& step)
 {
+    QJsonArray zones;
+    for(int zoneId : step.zoneIds) {
+        zones.append(zoneId);
+    }
+
     QJsonObject object;
-    object["id"] = zone.id;
-    object["zoneId"] = zone.zoneId;
-    object["sequence"] = zone.sequence;
-    object["durationSeconds"] = zone.durationSeconds;
+    object["id"] = step.id;
+    object["zones"] = zones;
+    object["durationSeconds"] = step.durationSeconds;
     return object;
 }
 
 bool ProgramJson::fromJson(const QJsonObject& object,
                            Program& program,
                            ProgramStartTimeList& startTimes,
-                           ProgramZoneList& zones,
+                           ProgramStepList& steps,
                            QString& errorMessage)
 {
     if(object.value("name").isString() == false) {
@@ -83,8 +87,8 @@ bool ProgramJson::fromJson(const QJsonObject& object,
         return false;
     }
 
-    if(object.value("zones").isArray() == false) {
-        errorMessage = "zones must be an array";
+    if(object.value("steps").isArray() == false) {
+        errorMessage = "steps must be an array";
         return false;
     }
 
@@ -143,24 +147,25 @@ bool ProgramJson::fromJson(const QJsonObject& object,
         parsedStartTimes.append(startTime);
     }
 
-    ProgramZoneList parsedZones;
-    const QJsonArray zonesArray = object.value("zones").toArray();
-    for(const QJsonValue& value : zonesArray) {
+    ProgramStepList parsedSteps;
+    const QJsonArray stepsArray = object.value("steps").toArray();
+    for(const QJsonValue& value : stepsArray) {
         if(value.isObject() == false) {
-            errorMessage = "each zone must be an object";
+            errorMessage = "each step must be an object";
             return false;
         }
 
-        ProgramZone zone;
-        if(zoneFromJson(value.toObject(), zone, errorMessage) == false) {
+        ProgramStep step;
+        if(stepFromJson(value.toObject(), step, errorMessage) == false) {
             return false;
         }
-        parsedZones.append(zone);
+        step.sequence = static_cast<int>(parsedSteps.count()) + 1;
+        parsedSteps.append(step);
     }
 
     program = parsedProgram;
     startTimes = parsedStartTimes;
-    zones = parsedZones;
+    steps = parsedSteps;
     return true;
 }
 
@@ -193,20 +198,35 @@ bool ProgramJson::startTimeFromJson(const QJsonObject& object, ProgramStartTime&
     return true;
 }
 
-bool ProgramJson::zoneFromJson(const QJsonObject& object, ProgramZone& zone, QString& errorMessage)
+bool ProgramJson::stepFromJson(const QJsonObject& object, ProgramStep& step, QString& errorMessage)
 {
-    if(object.value("zoneId").isDouble() == false) {
-        errorMessage = "zone entries require a numeric zoneId";
+    if(object.value("zones").isArray() == false) {
+        errorMessage = "steps require a zones array";
         return false;
     }
 
-    if(object.value("sequence").isDouble() == false) {
-        errorMessage = "zone entries require a numeric sequence";
+    const QJsonArray zones = object.value("zones").toArray();
+    if(zones.isEmpty()) {
+        errorMessage = "each step needs at least one zone";
         return false;
+    }
+
+    QList<int> zoneIds;
+    for(const QJsonValue& zone : zones) {
+        if(zone.isDouble() == false) {
+            errorMessage = "step zones must be numeric zone ids";
+            return false;
+        }
+        const int zoneId = zone.toInt();
+        if(zoneIds.contains(zoneId)) {
+            errorMessage = QString("a step lists zone id %1 twice").arg(zoneId);
+            return false;
+        }
+        zoneIds.append(zoneId);
     }
 
     if(object.value("durationSeconds").isDouble() == false) {
-        errorMessage = "zone entries require a numeric durationSeconds";
+        errorMessage = "steps require a numeric durationSeconds";
         return false;
     }
 
@@ -216,9 +236,8 @@ bool ProgramJson::zoneFromJson(const QJsonObject& object, ProgramZone& zone, QSt
         return false;
     }
 
-    zone.zoneId = object.value("zoneId").toInt();
-    zone.sequence = object.value("sequence").toInt();
-    zone.durationSeconds = durationSeconds;
+    step.zoneIds = zoneIds;
+    step.durationSeconds = durationSeconds;
     return true;
 }
 

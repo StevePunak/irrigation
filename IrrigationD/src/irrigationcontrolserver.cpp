@@ -4,6 +4,7 @@
 #include "json/programjson.h"
 #include "json/statusjson.h"
 #include "scheduler.h"
+#include "zonecontroller.h"
 
 #include <Kanoop/loggingtypes.h>
 
@@ -23,17 +24,23 @@
 #include <QUuid>
 
 const QStringList IrrigationControlServer::SettingsKeys = {
-    "rain_delay_until", "master_enabled", "max_zone_seconds", "log_level"
+    "rain_delay_until", "master_enabled", "max_zone_seconds", "log_level", "max_concurrent_zones"
 };
+
+// Bounded: the daemon stops this server from its own thread during teardown, and a
+// route still waiting on that thread for a decision would block the stop() forever.
+const TimeSpan IrrigationControlServer::DefaultDecisionTimeout = TimeSpan::fromSeconds(5);
 
 IrrigationControlServer::IrrigationControlServer(const QString& databasePath) :
     AbstractThreadClass("control-server"),
     _databasePath(databasePath),
     _bindAddress("127.0.0.1"),
-    _listenPort(8080)
+    _listenPort(8080),
+    _decisionTimeout(DefaultDecisionTimeout)
 {
     IrrigationControlServer::setObjectName(IrrigationControlServer::metaObject()->className());
     qRegisterMetaType<ServerStatus>();
+    qRegisterMetaType<RunRequestPtr>();
     connect(this, &IrrigationControlServer::statusUpdateRequested,
             this, &IrrigationControlServer::onStatusUpdateRequested);
 }
@@ -110,6 +117,12 @@ void IrrigationControlServer::threadStarted()
                        [this](int zoneNumber, const QHttpServerRequest& request)
     {
         return this->handleZoneRun(zoneNumber, request);
+    });
+
+    _httpServer->route("/admin/zones/<arg>/stop", QHttpServerRequest::Method::Post,
+                       [this](int zoneNumber, const QHttpServerRequest& request)
+    {
+        return this->handleZoneStop(zoneNumber, request);
     });
 
     _httpServer->route("/admin/programs", QHttpServerRequest::Method::Get,
@@ -313,12 +326,34 @@ QHttpServerResponse IrrigationControlServer::handleZoneRun(int zoneNumber,
     }
 
     if(enabled == false) {
-        return QHttpServerResponse(QJsonObject{{"error", "zone is disabled"}},
+        return QHttpServerResponse(QJsonObject{{"error", QString("zone %1 is disabled").arg(zoneNumber)},
+                                               {"reason", RunRequest::refusalToString(RunRequest::Refusal::ZoneDisabled)}},
                                    QHttpServerResponder::StatusCode::Conflict);
     }
 
-    emit manualZoneRunRequested(zoneNumber, seconds);
+    const RunRequestPtr decision(new RunRequest);
+    emit manualZoneRunRequested(zoneNumber, seconds, decision);
+    return decisionResponse(decision);
+}
 
+QHttpServerResponse IrrigationControlServer::handleZoneStop(int zoneNumber, const QHttpServerRequest& request)
+{
+    Q_UNUSED(request)
+    const ZoneList zones = _source->allZones();
+    bool known = false;
+    for(const Zone& zone : zones) {
+        if(zone.number == zoneNumber) {
+            known = true;
+            break;
+        }
+    }
+
+    if(known == false) {
+        return QHttpServerResponse(QJsonObject{{"error", "unknown zone"}},
+                                   QHttpServerResponder::StatusCode::NotFound);
+    }
+
+    emit zoneStopRequested(zoneNumber);
     return QHttpServerResponse(QJsonObject{{"accepted", true}},
                                QHttpServerResponder::StatusCode::Accepted);
 }
@@ -332,25 +367,27 @@ QHttpServerResponse IrrigationControlServer::handleProgramsGet(const QHttpServer
     const ProgramList programs = _source->allPrograms();
     for(const Program& program : programs) {
         const ProgramStartTimeList startTimes = _source->startTimesFor(program.id);
-        const ProgramZoneList zones = _source->zonesFor(program.id);
+        const ProgramStepList steps = _source->stepsFor(program.id);
         const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, nowUtc);
-        array.append(ProgramJson::toJson(program, startTimes, zones, nextRunUtc));
+        array.append(ProgramJson::toJson(program, startTimes, steps, nextRunUtc));
     }
     return QHttpServerResponse(array, QHttpServerResponder::StatusCode::Ok);
 }
 
-bool IrrigationControlServer::zoneIdsAreKnown(const ProgramZoneList& zones, const ZoneList& knownZones)
+bool IrrigationControlServer::zoneIdsAreKnown(const ProgramStepList& steps, const ZoneList& knownZones)
 {
-    for(const ProgramZone& zone : zones) {
-        bool found = false;
-        for(const Zone& candidate : knownZones) {
-            if(candidate.id == zone.zoneId) {
-                found = true;
-                break;
+    for(const ProgramStep& step : steps) {
+        for(int zoneId : step.zoneIds) {
+            bool found = false;
+            for(const Zone& candidate : knownZones) {
+                if(candidate.id == zoneId) {
+                    found = true;
+                    break;
+                }
             }
-        }
-        if(found == false) {
-            return false;
+            if(found == false) {
+                return false;
+            }
         }
     }
     return true;
@@ -435,15 +472,15 @@ QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServer
 
     Program program;
     ProgramStartTimeList startTimes;
-    ProgramZoneList zones;
+    ProgramStepList steps;
     QString errorMessage;
-    if(ProgramJson::fromJson(document.object(), program, startTimes, zones, errorMessage) == false) {
+    if(ProgramJson::fromJson(document.object(), program, startTimes, steps, errorMessage) == false) {
         return QHttpServerResponse(QJsonObject{{"error", errorMessage}},
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 
-    if(zoneIdsAreKnown(zones, _source->allZones()) == false) {
-        return QHttpServerResponse(QJsonObject{{"error", "unknown zoneId in zones"}},
+    if(zoneIdsAreKnown(steps, _source->allZones()) == false) {
+        return QHttpServerResponse(QJsonObject{{"error", "unknown zoneId in steps"}},
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 
@@ -462,12 +499,12 @@ QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServer
         ok = _source->insertStartTime(startTime);
     }
 
-    for(ProgramZone& zone : zones) {
+    for(ProgramStep& step : steps) {
         if(ok == false) {
             break;
         }
-        zone.programId = program.id;
-        ok = _source->insertProgramZone(zone);
+        step.programId = program.id;
+        ok = _source->insertProgramStep(step);
     }
 
     if(ok == false || commitTransaction() == false) {
@@ -477,7 +514,7 @@ QHttpServerResponse IrrigationControlServer::handleProgramPost(const QHttpServer
     }
 
     const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, QDateTime::currentDateTimeUtc());
-    return QHttpServerResponse(ProgramJson::toJson(program, startTimes, zones, nextRunUtc),
+    return QHttpServerResponse(ProgramJson::toJson(program, startTimes, steps, nextRunUtc),
                                QHttpServerResponder::StatusCode::Created);
 }
 
@@ -506,15 +543,15 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
 
     Program program;
     ProgramStartTimeList startTimes;
-    ProgramZoneList zones;
+    ProgramStepList steps;
     QString errorMessage;
-    if(ProgramJson::fromJson(document.object(), program, startTimes, zones, errorMessage) == false) {
+    if(ProgramJson::fromJson(document.object(), program, startTimes, steps, errorMessage) == false) {
         return QHttpServerResponse(QJsonObject{{"error", errorMessage}},
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 
-    if(zoneIdsAreKnown(zones, _source->allZones()) == false) {
-        return QHttpServerResponse(QJsonObject{{"error", "unknown zoneId in zones"}},
+    if(zoneIdsAreKnown(steps, _source->allZones()) == false) {
+        return QHttpServerResponse(QJsonObject{{"error", "unknown zoneId in steps"}},
                                    QHttpServerResponder::StatusCode::BadRequest);
     }
 
@@ -532,15 +569,15 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
     }
 
     if(ok) {
-        ok = _source->deleteProgramZones(programId);
+        ok = _source->deleteProgramSteps(programId);
     }
 
-    for(ProgramZone& zone : zones) {
+    for(ProgramStep& step : steps) {
         if(ok == false) {
             break;
         }
-        zone.programId = programId;
-        ok = _source->insertProgramZone(zone);
+        step.programId = programId;
+        ok = _source->insertProgramStep(step);
     }
 
     if(ok == false || commitTransaction() == false) {
@@ -555,7 +592,7 @@ QHttpServerResponse IrrigationControlServer::handleProgramPut(int programId, con
     });
 
     const QDateTime nextRunUtc = Scheduler::nextRunUtc(program, startTimes, QDateTime::currentDateTimeUtc());
-    return QHttpServerResponse(ProgramJson::toJson(program, startTimes, zones, nextRunUtc),
+    return QHttpServerResponse(ProgramJson::toJson(program, startTimes, steps, nextRunUtc),
                                QHttpServerResponder::StatusCode::Ok);
 }
 
@@ -601,10 +638,9 @@ QHttpServerResponse IrrigationControlServer::handleProgramRun(int programId, con
                                    QHttpServerResponder::StatusCode::NotFound);
     }
 
-    emit programRunRequested(programId);
-
-    return QHttpServerResponse(QJsonObject{{"accepted", true}},
-                               QHttpServerResponder::StatusCode::Accepted);
+    const RunRequestPtr decision(new RunRequest);
+    emit programRunRequested(programId, decision);
+    return decisionResponse(decision);
 }
 
 QHttpServerResponse IrrigationControlServer::handleStop(const QHttpServerRequest& request)
@@ -650,6 +686,12 @@ bool IrrigationControlServer::isValidSettingValue(const QString& key, const QStr
         return false;
     }
 
+    if(key == "max_concurrent_zones") {
+        bool ok = false;
+        const int zones = value.toInt(&ok);
+        return ok && zones >= 1 && zones <= ZoneController::MaxConcurrentZonesCeiling;
+    }
+
     return false;
 }
 
@@ -688,6 +730,27 @@ QHttpServerResponse IrrigationControlServer::handleSettingsPut(const QHttpServer
         responseObject[key] = _source->settingValue(key);
     }
     return QHttpServerResponse(responseObject, QHttpServerResponder::StatusCode::Ok);
+}
+
+QHttpServerResponse IrrigationControlServer::decisionResponse(const RunRequestPtr& decision)
+{
+    if(decision->wait(_decisionTimeout) == false) {
+        logText(LVL_ERROR, "A run request went unanswered by the valve thread");
+        return QHttpServerResponse(QJsonObject{{"error", "the controller did not answer"}, {"reason", "timeout"}},
+                                   QHttpServerResponder::StatusCode::ServiceUnavailable);
+    }
+
+    const RunRequest::Refusal refusal = decision->refusal();
+    if(refusal == RunRequest::Refusal::None) {
+        return QHttpServerResponse(QJsonObject{{"accepted", true}},
+                                   QHttpServerResponder::StatusCode::Accepted);
+    }
+
+    const QJsonObject body{{"error", decision->message()}, {"reason", RunRequest::refusalToString(refusal)}};
+    if(refusal == RunRequest::Refusal::Failed) {
+        return QHttpServerResponse(body, QHttpServerResponder::StatusCode::InternalServerError);
+    }
+    return QHttpServerResponse(body, QHttpServerResponder::StatusCode::Conflict);
 }
 
 #include "moc_irrigationcontrolserver.cpp"

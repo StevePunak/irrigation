@@ -107,12 +107,12 @@ static int buildProgram(IrrigationDataSource& source, const QList<ZoneStep>& ste
             }
         }
 
-        ProgramZone entry;
+        ProgramStep entry;
         entry.programId = program.id;
-        entry.zoneId = zoneId;
+        entry.zoneIds = { zoneId };
         entry.sequence = step.sequence;
         entry.durationSeconds = step.durationSeconds;
-        if(source.insertProgramZone(entry) == false) {
+        if(source.insertProgramStep(entry) == false) {
             return 0;
         }
     }

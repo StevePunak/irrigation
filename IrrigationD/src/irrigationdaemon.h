@@ -2,6 +2,7 @@
 #define IRRIGATIONDAEMON_H
 
 #include "iclock.h"
+#include "runrequest.h"
 
 #include <Kanoop/timespan.h>
 #include <Kanoop/utility/abstractthreadclass.h>
@@ -67,13 +68,23 @@ protected:
 private slots:
     void onStopPressed();
     void onProgramDue(int programId, int startTimeId, const QDateTime& scheduledAtUtc);
-    void onManualZoneRunRequested(int zoneNumber, int seconds);
-    void onProgramRunRequested(int programId);
+    void onManualZoneRunRequested(int zoneNumber, int seconds, const RunRequestPtr& decision);
+    void onProgramRunRequested(int programId, const RunRequestPtr& decision);
+    void onZoneStopRequested(int zoneNumber);
     void onSettingsChanged();
     void publishStatus();
 
 private:
     void connectComponents();
+
+    /**
+     * @brief Returns whether threadAboutToFinish() has deleted the components.
+     *
+     * @warning A request the control server queued before it stopped can still be
+     *          delivered after teardown. Every slot reached from another thread checks
+     *          this first.
+     */
+    bool isTornDown() const { return _programQueue == nullptr; }
 
     /**
      * @brief Applies the database max_zone_seconds and log_level.
