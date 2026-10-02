@@ -1,8 +1,10 @@
 #include "programrunner.h"
 
 #include "database/irrigationdatasource.h"
+#include "model/program.h"
 #include "model/zone.h"
-#include "zonecontroller.h"
+
+#include <algorithm>
 
 ProgramRunner::ProgramRunner(ZoneController* controller, IrrigationDataSource* source, QObject* parent) :
     QObject(parent),
@@ -20,12 +22,23 @@ bool ProgramRunner::startProgram(int programId)
         return false;
     }
 
-    _zones = _source->zonesFor(programId);
+    _steps = _source->stepsFor(programId);
+    _programName.clear();
+    const ProgramList programs = _source->allPrograms();
+    for(const Program& program : programs) {
+        if(program.id == programId) {
+            _programName = program.name;
+            break;
+        }
+    }
+
     _programId = programId;
-    _index = -1;
-    _expectedZone = 0;
+    _stepIndex = -1;
+    _waiting.clear();
+    _openZones.clear();
     _running = true;
 
+    logText(LVL_INFO, QString("Program %1 '%2' starts with %3 steps").arg(programId).arg(_programName).arg(_steps.count()));
     emit programStarted(programId);
 
     return advance();
@@ -40,81 +53,165 @@ void ProgramRunner::abort()
     stopRunning();
 }
 
-void ProgramRunner::stopRunning()
+void ProgramRunner::fillSlots()
 {
-    const int stopped = _programId;
-
-    // _running must already be false before allOff() runs: allOff() emits zoneClosed
-    // synchronously and onZoneClosed() gates advancing on _running.
-    _running = false;
-    _programId = 0;
-    _expectedZone = 0;
-
-    if(_controller->allOff() == false) {
-        logText(LVL_ERROR, QString("Failed to close the valve stopping program %1: %2")
-                                .arg(stopped).arg(_controller->errorText()));
+    if(_running == false || _waiting.isEmpty()) {
+        return;
     }
 
-    emit programAborted(stopped);
+    openWaiting();
 }
 
 bool ProgramRunner::advance()
 {
-    _index++;
+    while(_running == true) {
+        _stepIndex++;
+        if(_stepIndex >= _steps.count()) {
+            finish();
+            return true;
+        }
 
-    if(_index >= _zones.count()) {
-        const int finished = _programId;
-        _running = false;
-        _programId = 0;
-        _expectedZone = 0;
-        emit programFinished(finished);
-        return true;
+        loadStep();
+        if(_waiting.isEmpty()) {
+            logText(LVL_WARNING, QString("Program %1 step %2 has no enabled zone; moving on")
+                                     .arg(_programId).arg(_stepIndex + 1));
+            continue;
+        }
+
+        logText(LVL_INFO, QString("Program %1 starts step %2 of %3")
+                              .arg(_programId).arg(_stepIndex + 1).arg(_steps.count()));
+        return openWaiting();
     }
 
-    const ProgramZone next = _zones.at(_index);
+    return false;
+}
+
+void ProgramRunner::loadStep()
+{
+    _waiting.clear();
+    _openZones.clear();
+
+    const ProgramStep& step = _steps.at(_stepIndex);
     const ZoneList zones = _source->allZones();
 
-    int zoneNumber = 0;
-    bool zoneEnabled = false;
-    for(const Zone& zone : zones) {
-        if(zone.id == next.zoneId) {
-            zoneNumber = zone.number;
-            zoneEnabled = zone.enabled;
-            break;
+    for(int zoneId : step.zoneIds) {
+        int zoneNumber = 0;
+        bool zoneEnabled = false;
+        for(const Zone& zone : zones) {
+            if(zone.id == zoneId) {
+                zoneNumber = zone.number;
+                zoneEnabled = zone.enabled;
+                break;
+            }
+        }
+
+        if(zoneNumber == 0) {
+            logText(LVL_ERROR, QString("Program %1 references unknown zone id %2").arg(_programId).arg(zoneId));
+        }
+        else if(zoneEnabled == false) {
+            logText(LVL_WARNING, QString("Program %1 skips disabled zone %2").arg(_programId).arg(zoneNumber));
+        }
+        else if(_waiting.contains(zoneNumber) == false) {
+            _waiting.append(zoneNumber);
         }
     }
 
-    if(zoneNumber == 0) {
-        logText(LVL_ERROR, QString("Program %1 references unknown zone id %2")
-                               .arg(_programId).arg(next.zoneId));
-        return advance();
+    std::sort(_waiting.begin(), _waiting.end());
+}
+
+bool ProgramRunner::openWaiting()
+{
+    const int duration = _steps.at(_stepIndex).durationSeconds;
+    const QList<int> candidates = _waiting;
+    QList<int> stillWaiting;
+
+    for(int zoneNumber : candidates) {
+        // hasSlotFor() is true for a zone whose close is pending a retry, and openZone() refuses it.
+        if(_controller->isClosing(zoneNumber) == true || _controller->hasSlotFor(zoneNumber) == false) {
+            stillWaiting.append(zoneNumber);
+            continue;
+        }
+
+        if(_controller->openZone(zoneNumber, duration) == false) {
+            logText(LVL_ERROR, QString("Program %1 failed to open zone %2: %3")
+                                   .arg(_programId).arg(zoneNumber).arg(_controller->errorText()));
+            stopRunning();
+            return false;
+        }
+
+        _openZones.append(zoneNumber);
     }
 
-    if(zoneEnabled == false) {
-        logText(LVL_WARNING, QString("Program %1 skips disabled zone %2")
-                                 .arg(_programId).arg(zoneNumber));
-        return advance();
-    }
-
-    if(_controller->openZone(zoneNumber, next.durationSeconds) == false) {
-        logText(LVL_ERROR, QString("Program %1 failed to open zone %2: %3")
-                               .arg(_programId).arg(zoneNumber).arg(_controller->errorText()));
-        stopRunning();
-        return false;
-    }
-
-    _expectedZone = zoneNumber;
+    _waiting = stillWaiting;
     return true;
 }
 
-void ProgramRunner::onZoneClosed(int zoneNumber)
+void ProgramRunner::finish()
 {
-    if(_running == false || zoneNumber != _expectedZone) {
+    const int finished = _programId;
+
+    _running = false;
+    _programId = 0;
+    _programName.clear();
+    _stepIndex = -1;
+    _steps.clear();
+    _waiting.clear();
+    _openZones.clear();
+
+    logText(LVL_INFO, QString("Program %1 finished").arg(finished));
+    emit programFinished(finished);
+}
+
+void ProgramRunner::stopRunning()
+{
+    const int stopped = _programId;
+    const QList<int> owned = _openZones;
+
+    // State is cleared before any close: closeZone() emits zoneClosed synchronously,
+    // and onZoneClosed() would otherwise open waiting zones of the program being stopped.
+    _running = false;
+    _programId = 0;
+    _programName.clear();
+    _stepIndex = -1;
+    _steps.clear();
+    _waiting.clear();
+    _openZones.clear();
+
+    for(int zoneNumber : owned) {
+        if(_controller->closeZone(zoneNumber) == false) {
+            logText(LVL_ERROR, QString("Failed to close zone %1 stopping program %2: %3")
+                                   .arg(zoneNumber).arg(stopped).arg(_controller->errorText()));
+        }
+    }
+
+    logText(LVL_WARNING, QString("Program %1 aborted").arg(stopped));
+    emit programAborted(stopped);
+}
+
+void ProgramRunner::onZoneClosed(int zoneNumber, ZoneController::CloseReason reason)
+{
+    if(_running == false) {
         return;
     }
 
-    _expectedZone = 0;
-    advance();
+    if(reason == ZoneController::CloseReason::AllOff || reason == ZoneController::CloseReason::Watchdog) {
+        if(_openZones.contains(zoneNumber) || _waiting.contains(zoneNumber)) {
+            logText(LVL_WARNING, QString("Zone %1 of program %2 was closed by an all-off; aborting")
+                                     .arg(zoneNumber).arg(_programId));
+            stopRunning();
+        }
+        return;
+    }
+
+    _openZones.removeAll(zoneNumber);
+
+    if(openWaiting() == false) {
+        return;
+    }
+
+    if(_waiting.isEmpty() && _openZones.isEmpty()) {
+        advance();
+    }
 }
 
 void ProgramRunner::onWatchdogTripped()

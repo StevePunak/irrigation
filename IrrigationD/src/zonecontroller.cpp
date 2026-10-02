@@ -239,6 +239,11 @@ void ZoneController::startCloseTimer(int zoneNumber, const TimeSpan& delay)
     _closeTimers.value(zoneNumber)->start(static_cast<int>(milliseconds));
 }
 
+bool ZoneController::isClosing(int zoneNumber) const
+{
+    return _open.contains(zoneNumber) && _open.value(zoneNumber).closing;
+}
+
 int ZoneController::secondsRemaining(int zoneNumber) const
 {
     int result = 0;

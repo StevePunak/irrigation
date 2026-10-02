@@ -113,6 +113,9 @@ public:
     /** @brief Returns whether @p zoneNumber is open. */
     bool isOpen(int zoneNumber) const { return _open.contains(zoneNumber); }
 
+    /** @brief Returns true while @p zoneNumber's close write is pending a retry; false for a closed or normally open zone. */
+    bool isClosing(int zoneNumber) const;
+
     /** @brief Returns whether openZone(@p zoneNumber) would fit under the cap: the zone is open already or fewer than the cap are open. */
     bool hasSlotFor(int zoneNumber) const { return _open.contains(zoneNumber) || _open.count() < _maxConcurrentZones; }
 
