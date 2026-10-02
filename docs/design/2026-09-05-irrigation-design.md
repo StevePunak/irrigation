@@ -327,28 +327,45 @@ json/                           Request and response bodies
 
 ### 5.1 ZoneController safety contract
 
-`ZoneController` is the only component that touches GPIO. It enforces four
+`ZoneController` is the only component that touches GPIO. It enforces five
 invariants regardless of caller:
 
-1. **Mutual exclusion.** `openZone(n, duration)` closes any currently open zone
-   in the same atomic `OutputBank` write.
-2. **No open without a deadline.** There is no overload that opens a zone
-   indefinitely. A single-shot timer closes it.
-3. **Duration clamp.** Requested durations are clamped to a configured ceiling.
-4. **Watchdog.** A periodic tick independently verifies that no zone is open
-   past its deadline and closes the bank if one is.
+1. **Concurrency cap.** An open request that would put more than
+   `max_concurrent_zones` zones open together fails. All line changes for one
+   request go out in a single `OutputBank` write. Re-opening a zone that is
+   already open takes no slot and sets its deadline to now plus the requested
+   duration. Lowering the cap closes nothing; it refuses new opens until the
+   count falls below it.
+2. **No open without a deadline.** Every open zone has its own deadline and its
+   own single-shot close timer. There is no overload that opens a zone
+   indefinitely.
+3. **Duration clamp.** Each requested duration is clamped to a configured
+   ceiling.
+4. **Watchdog.** A periodic tick reads the bank back and compares it with the
+   expected *set* of open zones. A zone found past its deadline with its close
+   timer still armed is closed through the normal deadline path rather than
+   treated as a trip, so a coarse event-loop stall between the timer's firing
+   and the watchdog's tick does not read as a fault. The watchdog trips —
+   closes the bank and latches a fault that refuses every open until a later
+   tick reads back exactly the expected set with no zone open — for a zone
+   past its deadline with no close timer armed, a line that differs from the
+   expected set, or a failed read-back.
+5. **Count check.** The watchdog also trips if more lines read back asserted
+   than the cap in force when the open zones were opened.
 
-   This requires a read-back the IO library does not yet expose.
-   `IGpioBackend` has `setValues()` and no `getValues()`, so
-   `OutputBank::isActive()` reports the last value written rather than the line
-   state. The daemon plan must add `getValues()` to the interface, plus
-   `OutputBank::readValues()` and `InputPin::isAsserted()`, or invariant 4
-   verifies the cache against itself. `InputPin` needs the level accessor for a
-   second reason: an edge-only input has no initial state, so a STOP button
-   already held down when the daemon restarts under `Restart=always` is
-   invisible.
+A zone whose close write fails is marked closing and stays tracked until a
+retry lands; it cannot be re-opened, and every later bank write — another
+zone's open, another zone's close, the zone's own retried close — carries it
+as inactive, so it goes dark the next time anything touches the bank. No zone
+can open while an all-off or watchdog close is itself pending a retry; a
+failed all-off retries as a single bank write rather than per zone.
 
-`allOff()` is callable from any component and always takes precedence.
+The read-back uses `IGpioBackend::getValues()` through `OutputBank::readValues()`;
+`InputPin::isAsserted()` gives the STOP button its level at startup.
+
+Every close reports its reason — deadline, per-zone stop, all-off, or watchdog —
+so the runner can tell a finished step zone from a STOP. `allOff()` is callable
+from any component and always takes precedence.
 
 Construction order is a hard requirement: `ZoneController` is constructed and
 drives all eight lines de-asserted before the scheduler or HTTP server exist.
@@ -431,21 +448,46 @@ rain delay, and the global enable, then consults `fired_instants`.
 Day rules: `DaysOfWeek` (bitmask), `Odd`, `Even`, `EveryNDays` (interval plus
 anchor date).
 
-### 5.5 ProgramRunner
+### 5.5 ProgramRunner and the program queue
 
-A state machine walking a program's ordered zone list, advanced by
-`ZoneController::zoneClosed()` rather than a timer of its own, so timing has a
-single authority.
+A program is an ordered list of steps; a step is a set of zones and one
+duration. `ProgramRunner` walks the steps, advanced only by `ZoneController`'s
+close signal, so timing has a single authority.
 
-One runner is active at a time. A program whose start time arrives while another
-is running is skipped and recorded with outcome `skipped_busy`. A manual run
-preempts a running program.
+- The runner opens every zone of the step that fits under the cap. A zone that
+  does not fit, or whose close is pending a retry, waits and opens when a slot
+  frees and its close has landed, then runs the step's full duration from its
+  own open. Waiting zones open in ascending zone number.
+- A step completes when every one of its zones has opened and closed. A
+  disabled zone is skipped; a step of only disabled zones completes at once.
+- A zone already open when its step starts (a manual run) is taken over: its
+  deadline becomes now plus the step duration.
+- A per-zone stop of a step zone counts as that zone finishing its share of the
+  step. While a program is running, an all-off or watchdog close aborts it.
+- A program's steps are read once, at start. A read failure, or a failed open
+  in the first step, aborts the program before `ProgramQueue` records the
+  firing — it is recorded `failed`, never `ran`.
+
+One program runs at a time. `ProgramQueue` holds the rest, first in, first out,
+at most one entry per program; a running program may hold one queued entry. A
+start time that comes due while its program is already queued is recorded
+`skipped_duplicate`. A manual "run program now" joins the same queue and is
+refused while that program is running or queued. When an entry reaches the
+head, the master enable and, for scheduled entries, the rain delay are checked
+again: master off records `skipped_disabled`, a rain delay records
+`skipped_rain`. The queue lives in memory; entries lost to a restart are
+recorded `dropped_restart` at the next startup.
+
+A manual zone run never queues and never stops the running program: it opens
+alongside it if a slot is free and is refused otherwise.
 
 ### 5.6 Stop button
 
 `InputPin` on BCM 25 with pull-up bias, falling-edge detection, and 20ms
-kernel-side debounce. A press calls `ZoneController::allOff()` and aborts any
-active runner.
+kernel-side debounce. A press empties the program queue (each scheduled entry
+recorded `dropped_stop`), aborts the running program, and calls
+`ZoneController::allOff()`, in that order. While the button is held every open
+request is refused and every program that comes due is recorded `skipped_stop`.
 
 ## 6. Data model
 
@@ -472,7 +514,9 @@ programs              id, name, enabled, day_mode, dow_mask,
 
 program_start_times   id, program_id, minutes_after_midnight, timezone
 
-program_zones         id, program_id, zone_id, sequence, duration_seconds
+program_steps         id, program_id, sequence, duration_seconds
+
+program_step_zones    id, step_id, zone_id
 
 fired_instants        id, program_id, start_time_id,
                       scheduled_at_utc, outcome
@@ -480,7 +524,11 @@ fired_instants        id, program_id, start_time_id,
 settings              key, value
 ```
 
-`outcome` is one of `ran`, `skipped_busy`, `skipped_rain`, `missed`.
+`outcome` is one of `queued`, `ran`, `skipped_rain`, `skipped_stop`,
+`skipped_duplicate`, `skipped_disabled`, `dropped_stop`, `dropped_restart`,
+`missed`, `failed`. A due firing is inserted `queued` and updated to its final
+outcome when it starts or leaves the queue. `skipped_busy` appears only in rows
+written before schema 1.1.0.
 
 `scheduled_at_utc` is an ISO-8601 UTC string. The unique key over
 (`program_id`, `start_time_id`, `scheduled_at_utc`) is what makes firing
@@ -489,11 +537,16 @@ idempotent.
 `fired_instants` rows older than 90 days are pruned at startup.
 
 Settings keys: `rain_delay_until` (UTC), `master_enabled`, `max_zone_seconds`,
-`log_level`.
+`log_level`, `max_concurrent_zones` (1–8, default 2).
 
 Zone-to-GPIO mapping lives in the daemon's INI settings rather than the
 database. It describes the wiring of a particular box, so changing it must not
 require a schema migration.
+
+Schema 1.1.0 replaced `program_zones` with `program_steps` and
+`program_step_zones`; its migration turned each `program_zones` row into a
+one-zone step with the same id, sequence and duration, dropping any row whose
+program or zone no longer existed.
 
 Storage durability: `journal_mode=WAL`, `synchronous=FULL`, and `/var/log` on
 tmpfs. The device is powered from an unswitched outlet and will lose power
@@ -509,8 +562,9 @@ GET    /admin/health
 GET    /admin/version
 GET    /admin/status
 GET    /admin/zones
-PUT    /admin/zones/{id}
-POST   /admin/zones/{id}/run          { "seconds": N }
+PUT    /admin/zones/{number}
+POST   /admin/zones/{number}/run      { "seconds": N }
+POST   /admin/zones/{number}/stop
 GET    /admin/programs
 POST   /admin/programs
 PUT    /admin/programs/{id}
@@ -521,9 +575,20 @@ GET    /admin/settings
 PUT    /admin/settings
 ```
 
-`/admin/status` is the UI's polling endpoint and returns the running zone,
-seconds remaining, the next scheduled occurrence, and the controller's timezone
-identifier alongside its UTC timestamps.
+Run requests are decided on the thread that owns the valves and the reply waits
+for the decision, bounded at five seconds: 202 when accepted, 409 with a
+`reason` of `cap_reached`, `stop_held`, `master_disabled`, `zone_disabled` or
+`already_queued`, 500 when the open failed, 503 when no decision arrived.
+
+Program bodies carry `steps: [{ zones: [zoneId…], durationSeconds }]`;
+responses add each step's stored `id`.
+
+`/admin/status` is the UI's polling endpoint. It returns `running` (one entry
+per open zone: zone number, seconds remaining, `program` or `manual`),
+`program` (id, name, step, step count, waiting zone numbers, or `null`),
+`queue` (program id, name, queued-at instant), `maxConcurrentZones`, the next
+scheduled occurrence, the rain delay, the master enable, whether STOP is held,
+and the controller's timezone identifier alongside its UTC timestamps.
 
 ## 8. Web interface
 
@@ -531,15 +596,21 @@ React 19 + Vite + TypeScript in `web/`, built to `web/dist/`.
 
 Three screens:
 
-- **Now** — running zone with time remaining, next scheduled run, eight zone
-  tiles with a quick manual run, and a prominent stop control. Mobile-first with
-  large touch targets and high contrast for outdoor readability.
-- **Programs** — list, create, edit. Day rule, start times, ordered zone list
-  with durations, computed total runtime, next run.
-- **Settings** — rain delay, master enable, maximum zone runtime, zone names.
+- **Now** — one row per open zone with its countdown, a program/manual tag and
+  its own Stop; the running program's step and waiting zones; the queued
+  programs; the next scheduled run; eight zone tiles with a quick manual run,
+  every open tile glowing and Run disabled on the others at the cap with an
+  "N of N running" hint; a refused run shows the daemon's reason; and a
+  prominent stop control. Mobile-first with large touch targets and high
+  contrast for outdoor readability.
+- **Programs** — list, create, edit. Day rule, start times, ordered steps of
+  zone chips with one duration each, a "runs in waves" warning on a step with
+  more zones than the cap, computed total runtime assuming waves, next run.
+- **Settings** — rain delay, master enable, maximum zone runtime, max zones at
+  once, zone names.
 
-Polling rather than websockets: `/admin/status` every 2s while a zone is
-running, every 15s otherwise.
+The UI polls `/admin/status` every 2s while a zone is open,
+a program runs, or a program waits; every 15s otherwise.
 
 All times render in the **controller's** timezone as reported by
 `/admin/status`, not the viewing browser's.
@@ -602,9 +673,9 @@ Test-driven, following the project convention.
   without waiting.
 - `ProgramRunner` is tested against a fake `ZoneController`.
 
-The four safety invariants get dedicated tests: duration clamping, mutual
-exclusion on a second `openZone`, watchdog closure of a zone past its deadline,
-and `allOff()` aborting an active program.
+The safety invariants get dedicated tests: duration clamping, the concurrency
+cap, per-zone deadlines, the watchdog's set comparison and count check, and
+`allOff()` aborting an active program.
 
 ## 11. Deferred
 

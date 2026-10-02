@@ -40,8 +40,9 @@ database.
 
 | Use | Identifier |
 |---|---|
-| `POST /api/zones/{n}/run`, `PUT /api/zones/{n}` | `zone.number` |
-| `program.zones[].zoneId` | `zone.id` |
+| `POST /api/zones/{n}/run`, `POST /api/zones/{n}/stop`, `PUT /api/zones/{n}` | `zone.number` |
+| `status.running[].zone`, `status.program.waitingZones[]` | `zone.number` |
+| `program.steps[].zones[]` | `zone.id` |
 
 Every fixture in `src/test/fixtures.ts` uses zones whose `id` and `number`
 differ, because a fixture where they match cannot tell a transposed identifier
@@ -53,6 +54,14 @@ Every timestamp the API returns is UTC. Every rendering of one goes through
 `src/time/zonedformat.ts` with the IANA zone id `/api/status` reports. A start
 time is a wall-clock rule with no instant behind it and is converted by
 `minutesToClock()`, which takes no zone at all.
+
+## Refused runs
+
+`POST /api/zones/{n}/run` and `POST /api/programs/{id}/run` answer 409 with
+`{ "error", "reason" }` when the controller refuses. `ApiError.message` carries
+`error`, a sentence the screens show as-is, and `ApiError.reason` carries the
+machine name (`cap_reached`, `stop_held`, `master_disabled`, `zone_disabled`,
+`already_queued`).
 
 ## Day-of-week bits
 
