@@ -209,6 +209,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
               running={open}
               disabled={busy || (atCap && open === false)}
               onRun={onRun}
+              onStop={onStopZone}
             />
           )
         })}
