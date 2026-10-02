@@ -760,6 +760,7 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
     QCOMPARE(firstRunning.at(0).toObject().value("secondsRemaining").toInt(), 137);
     QCOMPARE(firstRunning.at(0).toObject().value("source").toString(), QString("manual"));
     QCOMPARE(firstRunning.at(1).toObject().value("zone").toInt(), 6);
+    QCOMPARE(firstRunning.at(1).toObject().value("secondsRemaining").toInt(), 1712);
     QCOMPARE(firstRunning.at(1).toObject().value("source").toString(), QString("program"));
     const QJsonObject firstProgram = firstBody.value("program").toObject();
     QCOMPARE(firstProgram.value("id").toInt(), 2);
@@ -3880,6 +3881,7 @@ void TestControlServer::zoneRunUnansweredAnswers503WithinTheDecisionTimeout()
 
     QCOMPARE(statusCode(reply), 503);
     QCOMPARE(QJsonDocument::fromJson(reply->readAll()).object().value("reason").toString(), QString("timeout"));
+    QVERIFY(elapsed.elapsed() >= 250);
     QVERIFY(elapsed.elapsed() < 3000);
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
@@ -3993,12 +3995,23 @@ void TestControlServer::programPostRoundTripsAMultiZoneStepInOrder()
     QNetworkReply* reply = postJson(manager, server.boundPort(), "/admin/programs", body);
     QCOMPARE(statusCode(reply), 201);
 
-    const QJsonArray steps = QJsonDocument::fromJson(reply->readAll()).object().value("steps").toArray();
+    const QJsonObject postBody = QJsonDocument::fromJson(reply->readAll()).object();
+    const QJsonArray steps = postBody.value("steps").toArray();
     QCOMPARE(steps.count(), 2);
     QCOMPARE(steps.at(0).toObject().value("zones").toArray(), QJsonArray({ 6, 5 }));
     QCOMPARE(steps.at(0).toObject().value("durationSeconds").toInt(), 1800);
     QVERIFY(steps.at(0).toObject().value("id").toInt() > 0);
     QCOMPARE(steps.at(1).toObject().value("zones").toArray(), QJsonArray({ 1 }));
+
+    QNetworkReply* getReply = getJson(manager, server.boundPort(), "/admin/programs");
+    const QJsonObject got = programObjectWithId(QJsonDocument::fromJson(getReply->readAll()).array(),
+                                                postBody.value("id").toInt());
+    const QJsonArray gotSteps = got.value("steps").toArray();
+    QCOMPARE(gotSteps.count(), 2);
+    QCOMPARE(gotSteps.at(0).toObject().value("zones").toArray(), QJsonArray({ 6, 5 }));
+    QCOMPARE(gotSteps.at(0).toObject().value("durationSeconds").toInt(), 1800);
+    QCOMPARE(gotSteps.at(1).toObject().value("zones").toArray(), QJsonArray({ 1 }));
+    QCOMPARE(gotSteps.at(1).toObject().value("durationSeconds").toInt(), 600);
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
 }
