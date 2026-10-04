@@ -71,7 +71,7 @@ bool Tm1637Display::writeByte(quint8 value)
         }
     }
 
-    // Acknowledge clock: DIO stays driven low so it never fights the chip's acknowledge pull-down.
+    // Acknowledge clock: DIO stays driven low.
     return setLine(_clockOffset, false) && setLine(_dataOffset, false)
         && setLine(_clockOffset, true) && setLine(_clockOffset, false);
 }

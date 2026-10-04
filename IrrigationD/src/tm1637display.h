@@ -15,8 +15,7 @@
  * bit first.
  *
  * @warning Both lines must be driven push-pull, and DIO must be driven low through
- *          every acknowledge clock. The module has no pull-up on CLK, and a DIO left
- *          to the module's own pull-up stayed blank on the bench.
+ *          every acknowledge clock. The module has no pull-up on CLK.
  */
 class Tm1637Display : public QObject
 {
