@@ -57,6 +57,10 @@ private slots:
     void zoneMapDuplicateZoneNumberKeepsLastOffsetAndWarnsInSummary();
     void zoneMapEmptyValueProducesEmptyMapWithNoWarnings();
     void zoneMapCleanRawIniProducesNoWarnings();
+    void panelOffsetsReadFromTheGpioGroup();
+    void missingPanelOffsetsReadAsAbsent();
+    void malformedPanelOffsetsReadAsAbsent();
+    void panelOffsetAcceptsAValuePaddedWithWhitespace();
 };
 
 void TestSettings::zoneMapParsesEightEntries()
@@ -205,6 +209,54 @@ void TestSettings::zoneMapCleanRawIniProducesNoWarnings()
     QCOMPARE(result.map.value(81), 810u);
     QCOMPARE(result.map.value(82), 820u);
     QVERIFY(result.entries.isEmpty());
+}
+
+void TestSettings::panelOffsetsReadFromTheGpioGroup()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("test.ini");
+    QVERIFY(writeRawIni(path, "[gpio]\nrunButtonOffset=24\ndisplayClockOffset=18\ndisplayDataOffset=27\n"));
+
+    IrrigationSettings settings(path);
+    QCOMPARE(settings.runButtonOffset(), 24);
+    QCOMPARE(settings.displayClockOffset(), 18);
+    QCOMPARE(settings.displayDataOffset(), 27);
+}
+
+void TestSettings::missingPanelOffsetsReadAsAbsent()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("test.ini");
+    QVERIFY(writeRawIni(path, "[gpio]\nstopButtonOffset=25\n"));
+
+    IrrigationSettings settings(path);
+    QCOMPARE(settings.runButtonOffset(), -1);
+    QCOMPARE(settings.displayClockOffset(), -1);
+    QCOMPARE(settings.displayDataOffset(), -1);
+}
+
+void TestSettings::malformedPanelOffsetsReadAsAbsent()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("test.ini");
+    QVERIFY(writeRawIni(path, "[gpio]\nrunButtonOffset=abc\ndisplayClockOffset=-1\ndisplayDataOffset=\n"));
+
+    IrrigationSettings settings(path);
+    QCOMPARE(settings.runButtonOffset(), -1);
+    QCOMPARE(settings.displayClockOffset(), -1);
+    QCOMPARE(settings.displayDataOffset(), -1);
+}
+
+// QSettings itself trims the padding off an unquoted raw-ini value before lineOffset()
+// ever sees it, so the surrounding whitespace never reaches its own .trimmed().
+void TestSettings::panelOffsetAcceptsAValuePaddedWithWhitespace()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("test.ini");
+    QVERIFY(writeRawIni(path, "[gpio]\nrunButtonOffset= 24 \n"));
+
+    IrrigationSettings settings(path);
+    QCOMPARE(settings.runButtonOffset(), 24);
 }
 
 QTEST_MAIN(TestSettings)

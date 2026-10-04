@@ -25,6 +25,7 @@
 
 #include "database/irrigationdatasource.h"
 #include "irrigationcontrolserver.h"
+#include "json/statusjson.h"
 #include "model/program.h"
 #include "model/programstarttime.h"
 #include "model/programstep.h"
@@ -458,6 +459,8 @@ private slots:
     void statusKeySetMatchesTheSerializer();
     void statusFieldTypesMatchTheWebDecoder();
     void updateStatusFromTheTestThreadAppearsInTheNextStatusGet();
+    void statusNamesAPanelRunPanel();
+    void sourceToJsonNamesAllThreeSources();
 
     void zonesGetListsAllEightSeededZones();
     void zonePutUpdatesTheZoneWhoseNumberMatches();
@@ -815,6 +818,43 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
     server.stop(TimeSpan::fromSeconds(5));
 }
 
+void TestControlServer::statusNamesAPanelRunPanel()
+{
+    QTemporaryDir dir;
+    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+
+    ServerStatus status;
+    status.running = { RunningZoneStatus{ 3, 600, RunningZoneStatus::Source::Panel },
+                       RunningZoneStatus{ 5, 300, RunningZoneStatus::Source::Program } };
+    status.maxConcurrentZones = 2;
+    status.timezone = "America/Los_Angeles";
+    status.masterEnabled = true;
+    server.updateStatus(status);
+
+    QJsonArray running;
+    for(int attempt = 0; attempt < 20 && running.count() != 2; attempt++) {
+        QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/status");
+        running = QJsonDocument::fromJson(reply->readAll()).object().value("running").toArray();
+    }
+
+    QCOMPARE(running.count(), 2);
+    QCOMPARE(running.at(0).toObject().value("zone").toInt(), 3);
+    QCOMPARE(running.at(0).toObject().value("source").toString(), QString("panel"));
+    QCOMPARE(running.at(1).toObject().value("source").toString(), QString("program"));
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
+void TestControlServer::sourceToJsonNamesAllThreeSources()
+{
+    QCOMPARE(StatusJson::sourceToJson(RunningZoneStatus::Source::Manual), QString("manual"));
+    QCOMPARE(StatusJson::sourceToJson(RunningZoneStatus::Source::Program), QString("program"));
+    QCOMPARE(StatusJson::sourceToJson(RunningZoneStatus::Source::Panel), QString("panel"));
+}
+
 void TestControlServer::zonesGetListsAllEightSeededZones()
 {
     QTemporaryDir dir;
@@ -1122,7 +1162,8 @@ void TestControlServer::settingsGetReturnsExactlyTheAllowlistedKeys()
     QStringList keys = body.keys();
     std::sort(keys.begin(), keys.end());
 
-    const QStringList expected = { "log_level", "master_enabled", "max_concurrent_zones", "max_zone_seconds", "rain_delay_until" };
+    const QStringList expected = { "log_level", "master_enabled", "max_concurrent_zones", "max_zone_seconds",
+                                   "panel_run_minutes", "rain_delay_until" };
     QCOMPARE(keys, expected);
 
     QCOMPARE(body.value("master_enabled").toString(), QString("1"));
@@ -1130,6 +1171,7 @@ void TestControlServer::settingsGetReturnsExactlyTheAllowlistedKeys()
     QCOMPARE(body.value("log_level").toString(), QString("info"));
     QCOMPARE(body.value("rain_delay_until").toString(), QString(""));
     QCOMPARE(body.value("max_concurrent_zones").toString(), QString("2"));
+    QCOMPARE(body.value("panel_run_minutes").toString(), QString("10"));
 
     server.stop(TimeSpan::fromSeconds(5));
 }
@@ -1154,6 +1196,9 @@ void TestControlServer::settingsPutRejectsInvalidValue_data()
     QTest::newRow("max_concurrent_zones at the zero boundary") << QString("max_concurrent_zones") << QString("0");
     QTest::newRow("max_concurrent_zones above the ceiling") << QString("max_concurrent_zones") << QString("9");
     QTest::newRow("max_concurrent_zones non-numeric") << QString("max_concurrent_zones") << QString("two");
+    QTest::newRow("panel_run_minutes at the zero boundary") << QString("panel_run_minutes") << QString("0");
+    QTest::newRow("panel_run_minutes above the ceiling") << QString("panel_run_minutes") << QString("61");
+    QTest::newRow("panel_run_minutes non-numeric") << QString("panel_run_minutes") << QString("ten");
 }
 
 void TestControlServer::settingsPutRejectsInvalidValue()
@@ -1195,6 +1240,9 @@ void TestControlServer::settingsPutRejectsInvalidValue()
     }
     else if(key == QString("max_concurrent_zones")) {
         QCOMPARE(verify.settingValue("max_concurrent_zones"), QString("2"));
+    }
+    else if(key == QString("panel_run_minutes")) {
+        QCOMPARE(verify.settingValue("panel_run_minutes"), QString("10"));
     }
     else {
         QVERIFY(verify.settingValue(key).isEmpty());
@@ -1366,6 +1414,8 @@ void TestControlServer::settingsPutAcceptsValidValueAtBothEdges_data()
     QTest::newRow("log_level lower case") << QString("log_level") << QString("debug");
     QTest::newRow("max_concurrent_zones at the minimum") << QString("max_concurrent_zones") << QString("1");
     QTest::newRow("max_concurrent_zones at the ceiling") << QString("max_concurrent_zones") << QString("8");
+    QTest::newRow("panel_run_minutes at the minimum") << QString("panel_run_minutes") << QString("1");
+    QTest::newRow("panel_run_minutes at the ceiling") << QString("panel_run_minutes") << QString("60");
 }
 
 void TestControlServer::settingsPutAcceptsValidValueAtBothEdges()

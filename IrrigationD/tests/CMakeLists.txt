@@ -144,3 +144,22 @@ irrigation_add_test(tst_controlserver
     ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
+
+irrigation_add_test(tst_panelhost
+    tst_panelhost.cpp
+    ../src/panelhost.cpp
+    ../src/panelcontroller.cpp
+    ../src/panelformat.cpp
+    ../src/programqueue.cpp
+    ../src/programrunner.cpp
+    ../src/runrequest.cpp
+    ../src/stopbutton.cpp
+    ../src/zonecontroller.cpp
+    ../src/database/irrigationdatasource.cpp
+    ../src/database/irrigation.qrc
+    ../src/model/zone.cpp
+    ../src/model/program.cpp
+    ../src/model/programstarttime.cpp
+    ../src/model/programstep.cpp
+    ../src/model/firedinstant.cpp
+)

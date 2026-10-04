@@ -24,7 +24,45 @@ private slots:
     void recreatesOnMigrationFailure();
     void seedsTheZoneCap();
     void migratesProgramZonesIntoOneZoneSteps();
+    void seedsThePanelRunTime();
+    void migratesThePanelRunTimeDefault();
+    void keepsAPanelRunTimeAlreadyStored();
 };
+
+// Builds a 1.1.0 database at @p path from the shipped scripts, then runs @p extra on it.
+static bool seedVersion110(const QString& path, const QStringList& extra)
+{
+    bool ok = true;
+    {
+        QSqlDatabase seed = QSqlDatabase::addDatabase("QSQLITE", "seed-110-connection");
+        seed.setDatabaseName(path);
+        ok = seed.open();
+        QSqlQuery query(seed);
+
+        const QStringList scripts = {
+            ":/database/migrate/irrigation/1.0.0/01-initial.sql",
+            ":/database/migrate/irrigation/1.1.0/01-program-steps.sql"
+        };
+        for(const QString& resource : scripts) {
+            QFile script(resource);
+            ok = ok && script.open(QIODevice::ReadOnly);
+            SqlParser parser(QString::fromUtf8(script.readAll()));
+            ok = ok && parser.isValid();
+            for(const QString& statement : parser.statements()) {
+                ok = ok && query.exec(statement);
+            }
+        }
+
+        ok = ok && query.exec("CREATE TABLE info (id INTEGER PRIMARY KEY, sw_version TEXT NOT NULL)");
+        ok = ok && query.exec("INSERT INTO info (id, sw_version) VALUES (1, '1.1.0')");
+        for(const QString& statement : extra) {
+            ok = ok && query.exec(statement);
+        }
+        seed.close();
+    }
+    QSqlDatabase::removeDatabase("seed-110-connection");
+    return ok;
+}
 
 void TestDataSource::createsSchemaOnFirstOpen()
 {
@@ -276,6 +314,47 @@ void TestDataSource::migratesProgramZonesIntoOneZoneSteps()
     QVERIFY(query.exec("SELECT COUNT(*) FROM program_step_zones WHERE step_id IN (70, 71)"));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 0);
+}
+
+void TestDataSource::seedsThePanelRunTime()
+{
+    QTemporaryDir dir;
+    IrrigationDataSource source(dir.filePath("irrigation.db"));
+    QVERIFY(source.open());
+    QCOMPARE(source.settingValue("panel_run_minutes"), QString("10"));
+}
+
+void TestDataSource::migratesThePanelRunTimeDefault()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath("irrigation.db");
+    QVERIFY(seedVersion110(path, { "UPDATE settings SET value = '3' WHERE key = 'max_concurrent_zones'" }));
+
+    IrrigationDataSource source(path);
+    QVERIFY2(source.open(), qPrintable(source.errorText()));
+
+    const QFileInfo dbInfo(path);
+    QVERIFY(QDir(dbInfo.absolutePath())
+                .entryList(QStringList() << dbInfo.fileName() + ".*.backup", QDir::Files).isEmpty());
+    QCOMPARE(source.settingValue("panel_run_minutes"), QString("10"));
+    QCOMPARE(source.settingValue("max_concurrent_zones"), QString("3"));
+
+    QSqlQuery query(QSqlDatabase::database(source.connectionName()));
+    QVERIFY(query.exec("SELECT sw_version FROM info WHERE id = 1"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), source.compiledDatabaseVersion());
+    QCOMPARE(source.compiledDatabaseVersion(), QString("1.2.0"));
+}
+
+void TestDataSource::keepsAPanelRunTimeAlreadyStored()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath("irrigation.db");
+    QVERIFY(seedVersion110(path, { "INSERT INTO settings (key, value) VALUES ('panel_run_minutes', '25')" }));
+
+    IrrigationDataSource source(path);
+    QVERIFY2(source.open(), qPrintable(source.errorText()));
+    QCOMPARE(source.settingValue("panel_run_minutes"), QString("25"));
 }
 
 QTEST_MAIN(TestDataSource)
