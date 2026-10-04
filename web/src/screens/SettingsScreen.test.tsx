@@ -257,6 +257,35 @@ describe('SettingsScreen', () => {
     expect(putSettings).not.toHaveBeenCalled()
   })
 
+  it('refuses a gardener panel run time that is not a whole number of minutes', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const field = await screen.findByLabelText(/gardener panel run time/i)
+    await user.clear(field)
+    await user.type(field, '12.5')
+    await user.click(screen.getByRole('button', { name: 'Save panel run time' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/whole number/i)
+    expect(putSettings).not.toHaveBeenCalled()
+  })
+
+  it.each(['1', '60'])('accepts a gardener panel run time of %s', async (value) => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const field = await screen.findByLabelText(/gardener panel run time/i)
+    await user.clear(field)
+    await user.type(field, value)
+    await user.click(screen.getByRole('button', { name: 'Save panel run time' }))
+
+    await waitFor(() => {
+      expect(putSettings).toHaveBeenCalledWith({ panel_run_minutes: value })
+    })
+  })
+
   it('shows no settings values when they could not be loaded', async () => {
     vi.spyOn(client, 'getSettings').mockRejectedValue(new Error('controller unreachable'))
 
