@@ -13,6 +13,7 @@ const QString IrrigationSettings::KEY_MAX_ZONE_SECONDS   = "limits/maxZoneSecond
 const QString IrrigationSettings::KEY_BIND_ADDRESS       = "server/bindAddress";
 const QString IrrigationSettings::KEY_LISTEN_PORT        = "server/listenPort";
 const QString IrrigationSettings::KEY_DATABASE_PATH      = "database/path";
+const QString IrrigationSettings::KEY_DATABASE_MOUNT_POINT = "database/mountPoint";
 
 IrrigationSettings::IrrigationSettings(const QString& path) :
     AppSettings(path)

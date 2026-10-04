@@ -4,8 +4,8 @@ Documentation=https://github.com/StevePunak/irrigation
 # dev-rtc0.device exists only while 99-irrigation-rtc.rules tags rtc0 for
 # systemd. Without the tag, this Wants= waits out the device timeout
 # (dev-rtc0.device.d/10-irrigation-timeout.conf) on every boot.
-Wants=dev-rtc0.device
-After=dev-rtc0.device time-sync.target
+Wants=dev-rtc0.device data.mount
+After=dev-rtc0.device time-sync.target data.mount
 # A repeatable startup failure must never let the rate limiter park this
 # unit failed: a parked unit waters nothing and never retries. This key
 # only takes effect in [Unit]; systemd silently ignores it under [Service].
@@ -13,6 +13,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+ExecStartPre=/bin/mkdir -p /data/irrigationd
 ExecStart=/usr/bin/irrigationd --config /etc/irrigationd.ini
 # Runs after every stop of the daemon, a crash included; the leading '-'
 # keeps a failed clear from marking the unit failed.

@@ -56,6 +56,13 @@ public:
     /** @brief Returns the path of the SQLite database file. */
     QString databasePath() const { return _settings.value(KEY_DATABASE_PATH, "/var/lib/irrigationd/irrigation.db").toString(); }
 
+    /**
+     * @brief Returns the mount point the database directory must sit on, or an empty string for no check.
+     *
+     * The daemon refuses to start while the database directory belongs to any other mount.
+     */
+    QString databaseMountPoint() const { return _settings.value(KEY_DATABASE_MOUNT_POINT).toString(); }
+
 private:
     int lineOffset(const QString& key) const;
 
@@ -70,6 +77,7 @@ private:
     static const QString KEY_BIND_ADDRESS;
     static const QString KEY_LISTEN_PORT;
     static const QString KEY_DATABASE_PATH;
+    static const QString KEY_DATABASE_MOUNT_POINT;
 };
 
 #endif // IRRIGATIONSETTINGS_H

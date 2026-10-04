@@ -19,6 +19,8 @@
 #include <Kanoop/timespan.h>
 #include <Kanoop/pi/libgpiodbackend.h>
 
+#include <QFileInfo>
+#include <QStorageInfo>
 #include <QTimeZone>
 #include <QTimer>
 
@@ -77,6 +79,16 @@ void IrrigationDaemon::threadStarted()
         }
         if(_stopButton->isHeld()) {
             logText(LVL_WARNING, "The stop button is held at startup");
+        }
+
+        const QString mountPoint = _settings->databaseMountPoint();
+        if(mountPoint.isEmpty() == false) {
+            const QString directory = QFileInfo(_settings->databasePath()).absolutePath();
+            const QString actual = QStorageInfo(directory).rootPath();
+            if(actual != mountPoint) {
+                throw CommonException(QString("The database directory '%1' sits on mount '%2'; it must be on '%3'")
+                                      .arg(directory, actual, mountPoint));
+            }
         }
 
         _dataSource = new IrrigationDataSource(_settings->databasePath());
