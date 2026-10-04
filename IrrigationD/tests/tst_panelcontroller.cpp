@@ -222,6 +222,7 @@ private slots:
     void masterOffShowsOffForTwoSecondsAndStartsNothing();
     void masterOffAtTheCommitShowsOff();
     void aRefusalAtTheCapShowsFullAndStartsNothing();
+    void aFaultDuringARefusalMessageShowsErrInstead();
     void aRefusedAdvanceKeepsTheCurrentZoneRunning();
     void aCapReachedAfterTheZoneAlreadyClosedEndsTheRun();
     void aPressDuringAPanelRunWhileAMessageIsShowingClearsItAndAdvances();
@@ -593,6 +594,19 @@ void TestPanelController::aRefusalAtTheCapShowsFullAndStartsNothing()
     QCOMPARE(rig.panel.frame(), PanelFormat::clock(QTime(18, 42), true));
 }
 
+void TestPanelController::aFaultDuringARefusalMessageShowsErrInstead()
+{
+    Rig rig;
+    rig.press();
+    rig.host.nextRefusal = RunRequest::Refusal::CapReached;
+    rig.wait(3000);
+    QCOMPARE(rig.panel.frame(), PanelFormat::full());
+
+    rig.host.state.faulted = true;
+    rig.panel.tick();
+    QCOMPARE(rig.panel.frame(), PanelFormat::fault());
+}
+
 void TestPanelController::aRefusedAdvanceKeepsTheCurrentZoneRunning()
 {
     Rig rig;
@@ -877,6 +891,7 @@ void TestPanelController::aSeenHighClearsTheStuckState()
     rig.panel.onRunLineChanged(true);
     rig.wait(10100);
     QVERIFY(rig.panel.isRunLineStuck());
+    QCOMPARE(log.count("stuck"), 1);
 
     rig.panel.onRunLineChanged(false);
     QVERIFY(rig.panel.isRunLineStuck() == false);
