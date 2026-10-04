@@ -102,11 +102,15 @@ private:
     bool isTornDown() const { return _programQueue == nullptr; }
 
     /**
-     * @brief Applies the database max_zone_seconds and log_level.
+     * @brief Applies the database max_zone_seconds, max_concurrent_zones, panel_run_minutes and log_level.
      *
      * The zone ceiling becomes the database value bounded by the INI ceiling, or the INI
-     * ceiling when the database value is absent or not a positive integer. log_level is
-     * skipped while --verbose was given.
+     * ceiling when the database value is absent or not a positive integer. The concurrent
+     * zone cap becomes the database value, or ZoneController::DefaultMaxConcurrentZones
+     * when the database value is absent or not an integer. The panel run time becomes the
+     * database value, or PanelController::DefaultRunMinutes when the database value is
+     * absent, unparsable, or outside PanelController::MinimumRunMinutes through
+     * MaximumRunMinutes (1-60). log_level is skipped while --verbose was given.
      */
     void applyRuntimeSettings();
 
