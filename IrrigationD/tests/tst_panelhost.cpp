@@ -28,6 +28,22 @@ QMap<int, quint32> eightZones()
 }
 }
 
+/** Backend whose read can be told to fail, to trip the controller's watchdog fault latch on demand. */
+class FaultBackend : public MockBackend
+{
+public:
+    bool failRead = false;
+
+    virtual bool getValues(Gpio::RequestHandle handle, const QList<quint32>& offsets, QList<Gpio::Value>& values) override
+    {
+        if(failRead == true) {
+            setErrorText("injected read failure");
+            return false;
+        }
+        return MockBackend::getValues(handle, offsets, values);
+    }
+};
+
 /** The daemon's components on the in-memory backend, wired as threadStarted() wires them. */
 class Rig
 {
@@ -104,7 +120,7 @@ public:
 
     QTemporaryDir dir;
     IrrigationDataSource source;
-    MockBackend backend;
+    FaultBackend backend;
     TestClock clock;
     ZoneController controller;
     StopButton stopButton;
@@ -120,6 +136,7 @@ private slots:
     void theSnapshotListsOpenAndEnabledZonesAscending();
     void theRunTimeIsClampedByTheZoneCeiling();
     void aPanelZoneOpensForTheRunTime();
+    void openPanelZoneRefusesOnAFaultBeforeStopMasterZoneOrCap();
     void refusalsComeInTheManualRunOrderAndOpenNothing();
     void aRefusedAdvanceLeavesTheReplacedZoneOpen();
     void anAdvanceSwapsZonesAtACapOfOne();
@@ -180,6 +197,21 @@ void TestPanelHost::aPanelZoneOpensForTheRunTime()
     QVERIFY(rig.controller.secondsRemaining(3) > 415 && rig.controller.secondsRemaining(3) <= 420);
 }
 
+void TestPanelHost::openPanelZoneRefusesOnAFaultBeforeStopMasterZoneOrCap()
+{
+    Rig rig;
+    QVERIFY(rig.begin());
+
+    rig.backend.failRead = true;
+    rig.controller.triggerWatchdogForTest();
+    QVERIFY(rig.controller.isFaulted());
+
+    QCOMPARE(rig.host.openPanelZone(1, 0), RunRequest::Refusal::Failed);
+
+    rig.holdStop();
+    QCOMPARE(rig.host.openPanelZone(1, 0), RunRequest::Refusal::Failed);
+}
+
 void TestPanelHost::refusalsComeInTheManualRunOrderAndOpenNothing()
 {
     Rig rig;
@@ -236,6 +268,10 @@ void TestPanelHost::anAdvanceSwapsZonesAtACapOfOne()
 
 void TestPanelHost::anAdvanceBesideAnotherZoneKeepsThatZone()
 {
+    // Declared before rig: reverse destruction order keeps this alive through Rig's
+    // destructor, which closes every open zone and would otherwise invoke the connected
+    // lambda below on a dangling capture.
+    QStringList order;
     Rig rig;
     QVERIFY(rig.begin());
     QVERIFY(rig.controller.openZone(5, 300));
@@ -247,7 +283,6 @@ void TestPanelHost::anAdvanceBesideAnotherZoneKeepsThatZone()
 
     rig.controller.setMaxConcurrentZones(3);
 
-    QStringList order;
     connect(&rig.controller, &ZoneController::zoneOpened, &rig.controller,
             [&order](int zoneNumber, int) { order.append(QString("open:%1").arg(zoneNumber)); });
     connect(&rig.controller, &ZoneController::zoneClosed, &rig.controller,
@@ -256,10 +291,6 @@ void TestPanelHost::anAdvanceBesideAnotherZoneKeepsThatZone()
     QCOMPARE(rig.host.openPanelZone(3, 2), RunRequest::Refusal::None);
     QCOMPARE(rig.controller.openZoneNumbers(), QList<int>({ 3, 5 }));
     QCOMPARE(order, QStringList({ "open:3", "close:2" }));
-
-    // order is destroyed before rig; Rig's destructor closes every open zone and must
-    // not reach into a dangling capture when it does.
-    rig.controller.disconnect();
 }
 
 void TestPanelHost::aWaitingProgramZoneTakesTheFreedSlot()
