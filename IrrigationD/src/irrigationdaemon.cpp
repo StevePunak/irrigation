@@ -414,7 +414,10 @@ void IrrigationDaemon::applyRuntimeSettings()
                            && panelMinutes <= PanelController::MaximumRunMinutes
                        ? panelMinutes
                        : PanelController::DefaultRunMinutes;
-    logText(LVL_INFO, QString("Panel runs last %1 minutes (database '%2')").arg(_panelRunMinutes).arg(storedPanelMinutes));
+    logText(LVL_INFO, QString("Panel runs last %1 %2 (database '%3')")
+                          .arg(_panelRunMinutes)
+                          .arg(_panelRunMinutes == 1 ? "minute" : "minutes")
+                          .arg(storedPanelMinutes));
 
     const QString levelName = _dataSource->settingValue("log_level");
     if(_verboseLogging == true) {
