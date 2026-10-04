@@ -7,8 +7,12 @@
 #include <QSocketNotifier>
 
 #include <Kanoop/log.h>
+#include <Kanoop/pi/libgpiodbackend.h>
 
 #include "irrigationdaemon.h"
+#include "irrigationsettings.h"
+#include "panelformat.h"
+#include "tm1637display.h"
 
 namespace
 {
@@ -20,9 +24,35 @@ namespace
         ssize_t written = ::write(signalFds[0], &byte, sizeof(byte));
         Q_UNUSED(written)
     }
+
+    bool showDashes(const QString& configPath)
+    {
+        IrrigationSettings settings(configPath);
+        const int clockOffset = settings.displayClockOffset();
+        const int dataOffset = settings.displayDataOffset();
+        if(clockOffset < 0 || dataOffset < 0) {
+            Log::logText(LVL_INFO, "No display lines are configured; there is nothing to clear");
+            return true;
+        }
+
+        LibGpiodBackend backend;
+        if(backend.openChipByLabel(settings.chipLabel()) == false) {
+            Log::logText(LVL_ERROR, QString("Failed to open GPIO chip '%1': %2").arg(settings.chipLabel(), backend.errorText()));
+            return false;
+        }
+
+        Tm1637Display display(&backend, static_cast<quint32>(clockOffset), static_cast<quint32>(dataOffset));
+        if(display.begin() == false || display.show(PanelFormat::dashes()) == false) {
+            Log::logText(LVL_ERROR, QString("Failed to write ---- to the display: %1").arg(display.errorText()));
+            return false;
+        }
+
+        return true;
+    }
 }
 
 const QString keyConfig =  "config";
+const QString keyDashes =  "dashes";
 const QString keyHelp =    "help";
 const QString keyVerbose = "verbose";
 
@@ -37,6 +67,7 @@ int main(int argc, char* argv[])
     parser.addOptions({
         // Short / Long name    Description                             Value name      Default
         {{ "c", keyConfig },    "Path to the INI configuration file",   "path",         "/etc/irrigationd.ini"  },
+        {{ keyDashes },         "Write ---- to the panel display and exit",                                     },
         {{ "v", keyVerbose },   "Log at debug level",                   /** short option */                     },
         {{ "?", keyHelp },      "Print usage and exit",                 /** short option */                     },
     });
@@ -49,6 +80,10 @@ int main(int argc, char* argv[])
     Log::setFlags(Log::Standard);
     Log::setLevel(parser.isSet(keyVerbose) ? Log::LogLevel::Debug : Log::LogLevel::Info);
     Log::systemLog()->openLog();
+
+    if(parser.isSet(keyDashes)) {
+        return showDashes(parser.value(keyConfig)) == true ? 0 : 1;
+    }
 
     if(::socketpair(AF_UNIX, SOCK_STREAM, 0, signalFds) != 0) {
         Log::logText(LVL_ERROR, "Failed to create signal socketpair");
