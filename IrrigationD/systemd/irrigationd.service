@@ -21,6 +21,7 @@ Restart=always
 RestartSec=5
 TimeoutStopSec=30
 WorkingDirectory=/var/lib/irrigationd
+StateDirectory=irrigationd
 
 [Install]
 WantedBy=multi-user.target
