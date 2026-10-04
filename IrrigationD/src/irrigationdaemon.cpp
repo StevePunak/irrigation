@@ -109,7 +109,12 @@ void IrrigationDaemon::threadStarted()
         _panel->tick();
         _panelTimer->start();
         _panelRefreshTimer->start();
-        logText(LVL_INFO, "The panel is showing its first frame");
+        if(_display != nullptr && _displayFailing == false) {
+            logText(LVL_INFO, "The panel is showing its first frame");
+        }
+        else {
+            logText(LVL_INFO, "The panel is running without its display");
+        }
 
         if(_controlServer->start() == false) {
             throw CommonException("The control server thread failed to start");
@@ -247,13 +252,9 @@ void IrrigationDaemon::onStopPressed()
         _panel->cancel();
     }
 
-    // dropAll() precedes abort(): an aborted program starts the next queued one.
-    _programQueue->dropAll(FiredInstant::Outcome::DroppedStop);
-    _programRunner->abort();
-
-    if(_zoneController->allOff() == false) {
-        logText(LVL_ERROR, QString("Failed to close the zones on a stop request: %1")
-                               .arg(_zoneController->errorText()));
+    QString errorText;
+    if(_panelHost->clearController(&errorText) == false) {
+        logText(LVL_ERROR, QString("Failed to close the zones on a stop request: %1").arg(errorText));
     }
 
     publishStatus();

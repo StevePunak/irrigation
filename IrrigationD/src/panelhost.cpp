@@ -35,15 +35,17 @@ int PanelHost::runSeconds() const
     return qMin(_runMinutes * 60, _controller->maxZoneSeconds());
 }
 
-void PanelHost::clearController()
+bool PanelHost::clearController(QString* errorText)
 {
     // dropAll() precedes abort(): an aborted program starts the next queued one.
     _queue->dropAll(FiredInstant::Outcome::DroppedStop);
     _runner->abort();
 
-    if(_controller->allOff() == false) {
-        logText(LVL_ERROR, QString("Failed to close the zones: %1").arg(_controller->errorText()));
+    const bool success = _controller->allOff();
+    if(success == false && errorText != nullptr) {
+        *errorText = _controller->errorText();
     }
+    return success;
 }
 
 PanelSnapshot PanelHost::panelSnapshot()
@@ -135,7 +137,11 @@ void PanelHost::closePanelZone(int zoneNumber)
 void PanelHost::takeOverForPanel()
 {
     logText(LVL_WARNING, "RUN took over: closing every zone, aborting the program and emptying the queue");
-    clearController();
+
+    QString errorText;
+    if(clearController(&errorText) == false) {
+        logText(LVL_ERROR, QString("Failed to close the zones: %1").arg(errorText));
+    }
 }
 
 QList<int> PanelHost::enabledZoneNumbers()

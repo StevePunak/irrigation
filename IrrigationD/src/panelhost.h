@@ -2,6 +2,7 @@
 #define PANELHOST_H
 
 #include <QList>
+#include <QString>
 
 #include <Kanoop/utility/loggingbaseclass.h>
 
@@ -16,8 +17,8 @@ class ZoneController;
 /**
  * @brief The daemon's side of the gardener panel: reads the controller, and opens, swaps, closes and clears zones for it.
  *
- * A panel run is refused for the same reasons as a manual run from the app, in the same
- * order: the fault latch, STOP held, master enable off, zone disabled, cap reached.
+ * A panel run is refused for the same reasons as a manual run from the app: the fault
+ * latch, STOP held, master enable off, zone disabled, cap reached.
  *
  * @warning Every method must be called on the thread that owns the zone controller.
  */
@@ -41,8 +42,12 @@ public:
     /** @brief Returns the seconds a panel run opens for: the run time clamped by the zone controller's ceiling. */
     int runSeconds() const;
 
-    /** @brief Clears the controller as STOP does: the queue empties recording dropped_stop, the program aborts, every zone closes. */
-    void clearController();
+    /**
+     * @brief Clears the controller as STOP does: the queue empties recording dropped_stop, the program aborts, every zone closes.
+     * @param errorText When given and the close fails, set to the failure text.
+     * @return True on success.
+     */
+    bool clearController(QString* errorText = nullptr);
 
     /** @brief Reads the open zones, the enabled zones, the run time, STOP, the fault latch and the master enable. */
     virtual PanelSnapshot panelSnapshot() override;
