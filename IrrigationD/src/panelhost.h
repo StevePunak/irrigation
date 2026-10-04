@@ -33,7 +33,7 @@ public:
               IrrigationDataSource* source,
               StopButton* stopButton);
 
-    /** @brief Sets the panel run time in minutes, bounded to PanelController::MinimumRunMinutes through MaximumRunMinutes. */
+    /** @brief Sets the panel run time in minutes. */
     void setRunMinutes(int value);
 
     /** @brief Returns the panel run time in minutes. */

@@ -27,7 +27,7 @@ PanelHost::PanelHost(ZoneController* controller,
 
 void PanelHost::setRunMinutes(int value)
 {
-    _runMinutes = qBound(PanelController::MinimumRunMinutes, value, PanelController::MaximumRunMinutes);
+    _runMinutes = value;
 }
 
 int PanelHost::runSeconds() const
