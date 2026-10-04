@@ -95,6 +95,33 @@ irrigation_add_test(tst_programqueue
     ../src/model/firedinstant.cpp
 )
 
+irrigation_add_test(tst_panelformat
+    tst_panelformat.cpp
+    ../src/panelformat.cpp
+)
+
+irrigation_add_test(tst_tm1637display
+    tst_tm1637display.cpp
+    ../src/tm1637display.cpp
+)
+# beginFailsWhenTheLinesCannotBeRequested catches an errorText() read from a deleted
+# OutputBank only under this glibc environment; the bare binary and non-glibc hosts pass
+# that defect.
+set_tests_properties(tst_tm1637display PROPERTIES
+    ENVIRONMENT "MALLOC_PERTURB_=165;GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
+)
+
+irrigation_add_test(tst_runbutton
+    tst_runbutton.cpp
+    ../src/runbutton.cpp
+)
+# beginFailsWhenTheLineCannotBeRequested catches an errorText() read from a deleted
+# InputPin only under this glibc environment; the bare binary and non-glibc hosts pass
+# that defect.
+set_tests_properties(tst_runbutton PROPERTIES
+    ENVIRONMENT "MALLOC_PERTURB_=165;GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
+)
+
 irrigation_add_test(tst_controlserver
     tst_controlserver.cpp
     ../src/irrigationcontrolserver.cpp
