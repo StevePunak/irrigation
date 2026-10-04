@@ -267,11 +267,7 @@ QByteArray PanelController::render(const PanelSnapshot& snapshot)
 
 QByteArray PanelController::otherZonesFrame(const PanelSnapshot& snapshot, qint64 now)
 {
-    if(snapshot.secondsRemaining(_shownZone) < 0) {
-        _shownZone = snapshot.openZones.first().zone;
-        _shownSinceMsecs = now;
-    }
-    else if(now - _shownSinceMsecs >= AlternateMsecs) {
+    if(snapshot.secondsRemaining(_shownZone) < 0 || now - _shownSinceMsecs >= AlternateMsecs) {
         int next = snapshot.openZones.first().zone;
         for(const PanelSnapshot::OpenZone& open : snapshot.openZones) {
             if(open.zone > _shownZone) {
