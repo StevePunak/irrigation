@@ -4,6 +4,7 @@ export const SETTING_KEYS = {
   maxZoneSeconds: 'max_zone_seconds',
   logLevel: 'log_level',
   maxConcurrentZones: 'max_concurrent_zones',
+  panelRunMinutes: 'panel_run_minutes',
 } as const
 
 export const DEFAULT_MAX_ZONE_SECONDS = 3600
@@ -13,6 +14,12 @@ export const DEFAULT_MAX_CONCURRENT_ZONES = 2
 
 /** The daemon rejects any max_concurrent_zones outside 1 through this value with a 400. */
 export const MAX_CONCURRENT_ZONES_LIMIT = 8
+
+/** The daemon's default for panel_run_minutes, used when the setting is absent. */
+export const DEFAULT_PANEL_RUN_MINUTES = 10
+
+/** The daemon rejects any panel_run_minutes outside 1 through this value with a 400. */
+export const PANEL_RUN_MINUTES_LIMIT = 60
 
 /** Disabled only by the exact value '0', matching the daemon's scheduler. Widening the match shows watering off while the valves still run. */
 export function parseMasterEnabled(value: string | undefined): boolean {

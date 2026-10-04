@@ -4,7 +4,9 @@ import type { SettingsMap, Zone } from '../api/types'
 import {
   DEFAULT_MAX_ZONE_SECONDS,
   DEFAULT_MAX_CONCURRENT_ZONES,
+  DEFAULT_PANEL_RUN_MINUTES,
   MAX_CONCURRENT_ZONES_LIMIT,
+  PANEL_RUN_MINUTES_LIMIT,
   SETTING_KEYS,
   parseInstant,
   parseInteger,
@@ -22,6 +24,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
   const [names, setNames] = useState<Record<number, string>>({})
   const [ceilingMinutes, setCeilingMinutes] = useState(DEFAULT_MAX_ZONE_SECONDS / 60)
   const [maxZones, setMaxZones] = useState(DEFAULT_MAX_CONCURRENT_ZONES)
+  const [panelMinutes, setPanelMinutes] = useState(DEFAULT_PANEL_RUN_MINUTES)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -34,6 +37,7 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
         Math.round(parseInteger(loadedSettings[SETTING_KEYS.maxZoneSeconds], DEFAULT_MAX_ZONE_SECONDS) / 60),
       )
       setMaxZones(parseInteger(loadedSettings[SETTING_KEYS.maxConcurrentZones], DEFAULT_MAX_CONCURRENT_ZONES))
+      setPanelMinutes(parseInteger(loadedSettings[SETTING_KEYS.panelRunMinutes], DEFAULT_PANEL_RUN_MINUTES))
       setError(null)
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -77,6 +81,14 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
     }
     void write({ [SETTING_KEYS.maxConcurrentZones]: String(maxZones) })
   }, [maxZones, write])
+
+  const onSavePanelMinutes = useCallback(() => {
+    if (Number.isInteger(panelMinutes) === false || panelMinutes < 1 || panelMinutes > PANEL_RUN_MINUTES_LIMIT) {
+      setError(`The gardener panel run time must be a whole number of minutes from 1 to ${PANEL_RUN_MINUTES_LIMIT}.`)
+      return
+    }
+    void write({ [SETTING_KEYS.panelRunMinutes]: String(panelMinutes) })
+  }, [panelMinutes, write])
 
   const onRename = useCallback(
     async (zone: Zone) => {
@@ -147,6 +159,22 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
           </label>
           <button type="button" onClick={onSaveMaxZones}>
             Save max zones
+          </button>
+
+          <label>
+            Gardener panel run time (minutes)
+            <input
+              type="number"
+              min={1}
+              max={PANEL_RUN_MINUTES_LIMIT}
+              value={panelMinutes}
+              onChange={(event) => {
+                setPanelMinutes(Number(event.target.value))
+              }}
+            />
+          </label>
+          <button type="button" onClick={onSavePanelMinutes}>
+            Save panel run time
           </button>
 
           <h2>Rain delay</h2>
