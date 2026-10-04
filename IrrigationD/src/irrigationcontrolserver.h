@@ -37,7 +37,7 @@ struct RunningZoneStatus
 
     int zone = 0;
     int secondsRemaining = 0;
-    Source source = Source::Manual;
+    Source source = Source::Manual; ///< What opened the zone.
 };
 
 /** @brief One waiting program in a status snapshot. */
