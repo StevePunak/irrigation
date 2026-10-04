@@ -3,6 +3,7 @@
 #include "database/irrigationdatasource.h"
 #include "json/programjson.h"
 #include "json/statusjson.h"
+#include "panelcontroller.h"
 #include "scheduler.h"
 #include "zonecontroller.h"
 
@@ -24,7 +25,8 @@
 #include <QUuid>
 
 const QStringList IrrigationControlServer::SettingsKeys = {
-    "rain_delay_until", "master_enabled", "max_zone_seconds", "log_level", "max_concurrent_zones"
+    "rain_delay_until", "master_enabled", "max_zone_seconds", "log_level", "max_concurrent_zones",
+    "panel_run_minutes"
 };
 
 // Bounded: the daemon stops this server from its own thread during teardown, and a
@@ -698,6 +700,12 @@ bool IrrigationControlServer::isValidSettingValue(const QString& key, const QStr
         bool ok = false;
         const int zones = value.toInt(&ok);
         return ok && zones >= 1 && zones <= ZoneController::MaxConcurrentZonesCeiling;
+    }
+
+    if(key == "panel_run_minutes") {
+        bool ok = false;
+        const int minutes = value.toInt(&ok);
+        return ok && minutes >= PanelController::MinimumRunMinutes && minutes <= PanelController::MaximumRunMinutes;
     }
 
     return false;

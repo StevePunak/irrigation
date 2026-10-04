@@ -6,6 +6,9 @@ const QString IrrigationSettings::KEY_ZONES              = "gpio/zones";
 const QString IrrigationSettings::KEY_CHIP_LABEL         = "gpio/chipLabel";
 const QString IrrigationSettings::KEY_ZONE_ACTIVE_LOW    = "gpio/zoneActiveLow";
 const QString IrrigationSettings::KEY_STOP_BUTTON_OFFSET = "gpio/stopButtonOffset";
+const QString IrrigationSettings::KEY_RUN_BUTTON_OFFSET    = "gpio/runButtonOffset";
+const QString IrrigationSettings::KEY_DISPLAY_CLOCK_OFFSET = "gpio/displayClockOffset";
+const QString IrrigationSettings::KEY_DISPLAY_DATA_OFFSET  = "gpio/displayDataOffset";
 const QString IrrigationSettings::KEY_MAX_ZONE_SECONDS   = "limits/maxZoneSeconds";
 const QString IrrigationSettings::KEY_BIND_ADDRESS       = "server/bindAddress";
 const QString IrrigationSettings::KEY_LISTEN_PORT        = "server/listenPort";
@@ -48,6 +51,23 @@ QMap<int, quint32> IrrigationSettings::zoneGpioMap() const
     }
 
     return result;
+}
+
+int IrrigationSettings::lineOffset(const QString& key) const
+{
+    if(_settings.contains(key) == false) {
+        return -1;
+    }
+
+    const QString raw = _settings.value(key).toString();
+    bool ok = false;
+    const int offset = raw.trimmed().toInt(&ok);
+    if(ok == false || offset < 0) {
+        Log::logText(LVL_WARNING, QString("Ignoring %1=\"%2\": expected a line offset").arg(key, raw));
+        return -1;
+    }
+
+    return offset;
 }
 
 #include "moc_irrigationsettings.cpp"

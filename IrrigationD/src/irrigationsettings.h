@@ -35,6 +35,15 @@ public:
     /** @brief Returns the GPIO line offset of the stop button. */
     quint32 stopButtonOffset() const { return _settings.value(KEY_STOP_BUTTON_OFFSET, 25).toUInt(); }
 
+    /** @brief Returns the GPIO line offset of the RUN button, or -1 when runButtonOffset is missing or malformed. */
+    int runButtonOffset() const { return lineOffset(KEY_RUN_BUTTON_OFFSET); }
+
+    /** @brief Returns the GPIO line offset of the display's CLK, or -1 when displayClockOffset is missing or malformed. */
+    int displayClockOffset() const { return lineOffset(KEY_DISPLAY_CLOCK_OFFSET); }
+
+    /** @brief Returns the GPIO line offset of the display's DIO, or -1 when displayDataOffset is missing or malformed. */
+    int displayDataOffset() const { return lineOffset(KEY_DISPLAY_DATA_OFFSET); }
+
     /** @brief Returns the ceiling applied to any requested zone duration, in seconds. */
     int maxZoneSeconds() const { return _settings.value(KEY_MAX_ZONE_SECONDS, 3600).toInt(); }
 
@@ -48,10 +57,15 @@ public:
     QString databasePath() const { return _settings.value(KEY_DATABASE_PATH, "/var/lib/irrigationd/irrigation.db").toString(); }
 
 private:
+    int lineOffset(const QString& key) const;
+
     static const QString KEY_ZONES;
     static const QString KEY_CHIP_LABEL;
     static const QString KEY_ZONE_ACTIVE_LOW;
     static const QString KEY_STOP_BUTTON_OFFSET;
+    static const QString KEY_RUN_BUTTON_OFFSET;
+    static const QString KEY_DISPLAY_CLOCK_OFFSET;
+    static const QString KEY_DISPLAY_DATA_OFFSET;
     static const QString KEY_MAX_ZONE_SECONDS;
     static const QString KEY_BIND_ADDRESS;
     static const QString KEY_LISTEN_PORT;

@@ -72,4 +72,5 @@ INSERT INTO settings (key, value) VALUES
     ('master_enabled',       '1'),
     ('max_zone_seconds',     '3600'),
     ('log_level',            'info'),
-    ('max_concurrent_zones', '2');
+    ('max_concurrent_zones', '2'),
+    ('panel_run_minutes',    '10');
