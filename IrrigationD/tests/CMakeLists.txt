@@ -122,6 +122,13 @@ set_tests_properties(tst_runbutton PROPERTIES
     ENVIRONMENT "MALLOC_PERTURB_=165;GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
 )
 
+irrigation_add_test(tst_panelcontroller
+    tst_panelcontroller.cpp
+    ../src/panelcontroller.cpp
+    ../src/panelformat.cpp
+    ../src/runrequest.cpp
+)
+
 irrigation_add_test(tst_controlserver
     tst_controlserver.cpp
     ../src/irrigationcontrolserver.cpp
