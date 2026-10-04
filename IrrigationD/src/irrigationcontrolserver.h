@@ -27,9 +27,17 @@ class QTcpServer;
 /** @brief One open zone in a status snapshot. zone is the zone number. */
 struct RunningZoneStatus
 {
+    /** @brief What opened the zone. */
+    enum class Source
+    {
+        Manual,     ///< A manual run from the app or the API.
+        Program,    ///< The running program owns the zone.
+        Panel       ///< The gardener panel's current panel run.
+    };
+
     int zone = 0;
     int secondsRemaining = 0;
-    bool fromProgram = false;
+    Source source = Source::Manual;
 };
 
 /** @brief One waiting program in a status snapshot. */

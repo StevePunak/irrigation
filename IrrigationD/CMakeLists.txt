@@ -21,6 +21,7 @@ qt_add_executable(${PROJ}
     src/runbutton.h           src/runbutton.cpp
     src/ipanelhost.h
     src/panelcontroller.h     src/panelcontroller.cpp
+    src/panelhost.h           src/panelhost.cpp
     src/programrunner.h       src/programrunner.cpp
     src/programqueue.h        src/programqueue.cpp
     src/runrequest.h          src/runrequest.cpp

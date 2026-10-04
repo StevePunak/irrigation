@@ -730,7 +730,7 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
     QNetworkAccessManager manager;
 
     ServerStatus first;
-    first.running = { RunningZoneStatus{ 4, 137, false }, RunningZoneStatus{ 6, 1712, true } };
+    first.running = { RunningZoneStatus{ 4, 137, RunningZoneStatus::Source::Manual }, RunningZoneStatus{ 6, 1712, RunningZoneStatus::Source::Program } };
     first.programId = 2;
     first.programName = "Morning Drip";
     first.programStep = 1;
@@ -783,7 +783,7 @@ void TestControlServer::updateStatusFromTheTestThreadAppearsInTheNextStatusGet()
     // masterEnabled and stopHeld must both stay true here; nextRunUtc must stay in a
     // non-UTC zone.
     ServerStatus second;
-    second.running = { RunningZoneStatus{ 7, 42, false } };
+    second.running = { RunningZoneStatus{ 7, 42, RunningZoneStatus::Source::Manual } };
     second.maxConcurrentZones = 3;
     second.nextRunUtc = QDateTime(QDate(2026, 11, 3), QTime(3, 5, 0), QTimeZone("America/Denver"));
     second.rainDelayUntilUtc = QDateTime(QDate(2026, 11, 10), QTime(21, 50, 0), QTimeZone::UTC);

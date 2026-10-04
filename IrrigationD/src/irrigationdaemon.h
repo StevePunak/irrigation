@@ -7,6 +7,7 @@
 #include <Kanoop/timespan.h>
 #include <Kanoop/utility/abstractthreadclass.h>
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QString>
 
@@ -14,11 +15,15 @@ class IGpioBackend;
 class IrrigationControlServer;
 class IrrigationDataSource;
 class IrrigationSettings;
+class PanelController;
+class PanelHost;
 class ProgramQueue;
 class ProgramRunner;
 class QTimer;
+class RunButton;
 class Scheduler;
 class StopButton;
+class Tm1637Display;
 class ZoneController;
 
 /**
@@ -73,9 +78,19 @@ private slots:
     void onZoneStopRequested(int zoneNumber);
     void onSettingsChanged();
     void publishStatus();
+    void onPanelFrame(const QByteArray& segments);
+    void onPanelRefresh();
 
 private:
     void connectComponents();
+
+    /**
+     * @brief Requests the display and RUN lines that are configured and builds the panel.
+     *
+     * A missing key or a failed request is logged and leaves that part out; the daemon
+     * runs on without it.
+     */
+    void setUpPanel();
 
     /**
      * @brief Returns whether threadAboutToFinish() has deleted the components.
@@ -104,6 +119,8 @@ private:
     static const TimeSpan StatusInterval;
     static constexpr int ControlServerReadySeconds = 10;
     static constexpr int FiredInstantRetentionDays = 90;
+    static constexpr int PanelTickMilliseconds = 100;
+    static constexpr int PanelRefreshMilliseconds = 1000;
 
     QString _settingsPath;
     QString _errorText;
@@ -120,6 +137,14 @@ private:
     Scheduler* _scheduler = nullptr;
     IrrigationControlServer* _controlServer = nullptr;
     QTimer* _statusTimer = nullptr;
+    Tm1637Display* _display = nullptr;
+    RunButton* _runButton = nullptr;
+    PanelHost* _panelHost = nullptr;
+    PanelController* _panel = nullptr;
+    QTimer* _panelTimer = nullptr;
+    QTimer* _panelRefreshTimer = nullptr;
+    int _panelRunMinutes = 0;
+    bool _displayFailing = false;
 };
 
 #endif // IRRIGATIONDAEMON_H

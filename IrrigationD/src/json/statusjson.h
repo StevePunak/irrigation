@@ -4,7 +4,7 @@
 #include <QDateTime>
 #include <QJsonObject>
 
-struct ServerStatus;
+#include "irrigationcontrolserver.h"
 
 /** @brief Converts ServerStatus into the wire shape decoded by the web client's Status type. */
 class StatusJson
@@ -12,6 +12,13 @@ class StatusJson
 public:
     /** @brief Serializes @p status into the GET /admin/status response body. */
     static QJsonObject toJson(const ServerStatus& status);
+
+    /**
+     * @brief Returns the wire name for @p value.
+     *
+     * The names are the running[].source contract with the web client's RunSource type.
+     */
+    static QString sourceToJson(RunningZoneStatus::Source value);
 
 private:
     static QString instantToJson(const QDateTime& value);

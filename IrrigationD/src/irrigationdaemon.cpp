@@ -3,10 +3,14 @@
 #include "database/irrigationdatasource.h"
 #include "irrigationcontrolserver.h"
 #include "irrigationsettings.h"
+#include "panelcontroller.h"
+#include "panelhost.h"
 #include "programqueue.h"
 #include "programrunner.h"
+#include "runbutton.h"
 #include "scheduler.h"
 #include "stopbutton.h"
+#include "tm1637display.h"
 #include "zonecontroller.h"
 
 #include <Kanoop/commonexception.h>
@@ -91,6 +95,8 @@ void IrrigationDaemon::threadStarted()
         _programQueue->recordRestartDrops();
         _scheduler = new Scheduler(_dataSource, &_clock);
 
+        setUpPanel();
+
         _controlServer = new IrrigationControlServer(_settings->databasePath());
         _controlServer->setBindAddress(_settings->bindAddress());
         _controlServer->setListenPort(_settings->listenPort());
@@ -99,6 +105,11 @@ void IrrigationDaemon::threadStarted()
         _statusTimer->setInterval(static_cast<int>(StatusInterval.totalMilliseconds()));
 
         connectComponents();
+
+        _panel->tick();
+        _panelTimer->start();
+        _panelRefreshTimer->start();
+        logText(LVL_INFO, "The panel is showing its first frame");
 
         if(_controlServer->start() == false) {
             throw CommonException("The control server thread failed to start");
@@ -130,10 +141,24 @@ void IrrigationDaemon::threadAboutToFinish()
     delete _statusTimer;
     _statusTimer = nullptr;
 
+    delete _panelRefreshTimer;
+    _panelRefreshTimer = nullptr;
+
+    delete _panelTimer;
+    _panelTimer = nullptr;
+
     // The queue goes before the runner aborts: an aborted program starts the next queued
     // one, and nothing may open a valve during teardown.
     delete _programQueue;
     _programQueue = nullptr;
+
+    // isTornDown() guards onSettingsChanged()'s unchecked _panelHost dereference, so both
+    // are deleted only after _programQueue is nulled.
+    delete _panel;
+    _panel = nullptr;
+
+    delete _panelHost;
+    _panelHost = nullptr;
 
     if(_programRunner != nullptr) {
         _programRunner->abort();
@@ -159,6 +184,13 @@ void IrrigationDaemon::threadAboutToFinish()
 
     delete _stopButton;
     _stopButton = nullptr;
+
+    delete _runButton;
+    _runButton = nullptr;
+
+    // ~Tm1637Display releases its lines through the backend, which must still hold the chip.
+    delete _display;
+    _display = nullptr;
 
     // ~ZoneController drives every zone inactive, which needs the backend to
     // still hold the chip.
@@ -193,6 +225,14 @@ void IrrigationDaemon::connectComponents()
     connect(_controlServer, &IrrigationControlServer::settingsChanged,
             this, &IrrigationDaemon::onSettingsChanged);
     connect(_statusTimer, &QTimer::timeout, this, &IrrigationDaemon::publishStatus);
+
+    if(_runButton != nullptr) {
+        connect(_runButton, &RunButton::lineChanged, _panel, &PanelController::onRunLineChanged);
+    }
+    connect(_panel, &PanelController::frameChanged, this, &IrrigationDaemon::onPanelFrame);
+    connect(_panel, &PanelController::stateChanged, this, &IrrigationDaemon::publishStatus);
+    connect(_panelTimer, &QTimer::timeout, _panel, &PanelController::tick);
+    connect(_panelRefreshTimer, &QTimer::timeout, this, &IrrigationDaemon::onPanelRefresh);
 }
 
 void IrrigationDaemon::onStopPressed()
@@ -202,6 +242,10 @@ void IrrigationDaemon::onStopPressed()
     }
 
     logText(LVL_WARNING, "Stop requested");
+
+    if(_panel != nullptr) {
+        _panel->cancel();
+    }
 
     // dropAll() precedes abort(): an aborted program starts the next queued one.
     _programQueue->dropAll(FiredInstant::Outcome::DroppedStop);
@@ -341,6 +385,7 @@ void IrrigationDaemon::onSettingsChanged()
     }
 
     applyRuntimeSettings();
+    _panelHost->setRunMinutes(_panelRunMinutes);
     _programRunner->fillSlots();
     publishStatus();
 }
@@ -361,6 +406,16 @@ void IrrigationDaemon::applyRuntimeSettings()
     _zoneController->setMaxConcurrentZones(parsedCap == true ? cap : ZoneController::DefaultMaxConcurrentZones);
     logText(LVL_INFO, QString("At most %1 zones open at once (database '%2')")
                           .arg(_zoneController->maxConcurrentZones()).arg(storedCap));
+
+    const QString storedPanelMinutes = _dataSource->settingValue("panel_run_minutes");
+    bool parsedPanelMinutes = false;
+    const int panelMinutes = storedPanelMinutes.toInt(&parsedPanelMinutes);
+    _panelRunMinutes = parsedPanelMinutes == true
+                           && panelMinutes >= PanelController::MinimumRunMinutes
+                           && panelMinutes <= PanelController::MaximumRunMinutes
+                       ? panelMinutes
+                       : PanelController::DefaultRunMinutes;
+    logText(LVL_INFO, QString("Panel runs last %1 minutes (database '%2')").arg(_panelRunMinutes).arg(storedPanelMinutes));
 
     const QString levelName = _dataSource->settingValue("log_level");
     if(_verboseLogging == true) {
@@ -394,6 +449,90 @@ bool IrrigationDaemon::isZoneEnabled(int zoneNumber)
     return enabled;
 }
 
+void IrrigationDaemon::setUpPanel()
+{
+    const int clockOffset = _settings->displayClockOffset();
+    const int dataOffset = _settings->displayDataOffset();
+    if(clockOffset < 0 || dataOffset < 0) {
+        logText(LVL_WARNING, "displayClockOffset or displayDataOffset is not configured; the panel runs without its display");
+    }
+    else {
+        logText(LVL_INFO, QString("Display clock line is %1, data line is %2").arg(clockOffset).arg(dataOffset));
+        _display = new Tm1637Display(_backend, static_cast<quint32>(clockOffset), static_cast<quint32>(dataOffset));
+        if(_display->begin() == false) {
+            logText(LVL_ERROR, QString("Failed to request the display lines %1 and %2: %3; the panel runs without its display")
+                                   .arg(clockOffset).arg(dataOffset).arg(_display->errorText()));
+            delete _display;
+            _display = nullptr;
+        }
+    }
+
+    const int runOffset = _settings->runButtonOffset();
+    if(runOffset < 0) {
+        logText(LVL_WARNING, "runButtonOffset is not configured; the RUN button is disabled");
+    }
+    else {
+        logText(LVL_INFO, QString("RUN button line is %1").arg(runOffset));
+        _runButton = new RunButton(_backend, static_cast<quint32>(runOffset));
+        if(_runButton->begin() == false) {
+            logText(LVL_ERROR, QString("Failed to request the RUN button line %1: %2; the RUN button is disabled")
+                                   .arg(runOffset).arg(_runButton->errorText()));
+            delete _runButton;
+            _runButton = nullptr;
+        }
+    }
+
+    _panelHost = new PanelHost(_zoneController, _programRunner, _programQueue, _dataSource, _stopButton);
+    _panelHost->setRunMinutes(_panelRunMinutes);
+
+    _panel = new PanelController(_panelHost, &_clock);
+    _panel->setTimeZone(QTimeZone::systemTimeZone());
+    if(_runButton != nullptr) {
+        _panel->setInitialRunLine(_runButton->isLow());
+        if(_runButton->isLow() == true) {
+            logText(LVL_WARNING, "The RUN button reads pressed at startup");
+        }
+    }
+
+    _panelTimer = new QTimer();
+    _panelTimer->setInterval(PanelTickMilliseconds);
+
+    _panelRefreshTimer = new QTimer();
+    _panelRefreshTimer->setInterval(PanelRefreshMilliseconds);
+}
+
+void IrrigationDaemon::onPanelFrame(const QByteArray& segments)
+{
+    if(_display == nullptr) {
+        return;
+    }
+
+    if(_display->show(segments) == false) {
+        if(_displayFailing == false) {
+            logText(LVL_ERROR, QString("Failed to write the display: %1").arg(_display->errorText()));
+        }
+        _displayFailing = true;
+    }
+    else if(_displayFailing == true) {
+        logText(LVL_INFO, "The display is writing again");
+        _displayFailing = false;
+    }
+}
+
+void IrrigationDaemon::onPanelRefresh()
+{
+    if(_display == nullptr || _panel == nullptr) {
+        return;
+    }
+
+    const QByteArray frame = _panel->frame();
+    if(frame.isEmpty() == true) {
+        return;
+    }
+
+    onPanelFrame(frame);
+}
+
 void IrrigationDaemon::publishStatus()
 {
     const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
@@ -405,7 +544,12 @@ void IrrigationDaemon::publishStatus()
         RunningZoneStatus running;
         running.zone = zoneNumber;
         running.secondsRemaining = _zoneController->secondsRemaining(zoneNumber);
-        running.fromProgram = _programRunner->ownsZone(zoneNumber);
+        if(_programRunner->ownsZone(zoneNumber) == true) {
+            running.source = RunningZoneStatus::Source::Program;
+        }
+        else if(_panel != nullptr && _panel->panelZone() == zoneNumber) {
+            running.source = RunningZoneStatus::Source::Panel;
+        }
         status.running.append(running);
     }
 

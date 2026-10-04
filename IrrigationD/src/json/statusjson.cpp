@@ -11,7 +11,7 @@ QJsonObject StatusJson::toJson(const ServerStatus& status)
         QJsonObject entry;
         entry["zone"] = zone.zone;
         entry["secondsRemaining"] = zone.secondsRemaining;
-        entry["source"] = zone.fromProgram == true ? "program" : "manual";
+        entry["source"] = sourceToJson(zone.source);
         running.append(entry);
     }
 
@@ -51,6 +51,19 @@ QJsonObject StatusJson::toJson(const ServerStatus& status)
     object["stopHeld"] = status.stopHeld;
     object["rainDelayUntilUtc"] = instantToJson(status.rainDelayUntilUtc);
     return object;
+}
+
+QString StatusJson::sourceToJson(RunningZoneStatus::Source value)
+{
+    switch(value) {
+    case RunningZoneStatus::Source::Program:
+        return "program";
+    case RunningZoneStatus::Source::Panel:
+        return "panel";
+    case RunningZoneStatus::Source::Manual:
+        break;
+    }
+    return "manual";
 }
 
 QString StatusJson::instantToJson(const QDateTime& value)
