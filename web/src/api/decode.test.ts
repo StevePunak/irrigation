@@ -67,6 +67,11 @@ describe('decodeStatus', () => {
     expect(() => decodeStatus({ ...goodStatus, running })).toThrow(/running\[0\]\.source/)
   })
 
+  it('reads a panel source', () => {
+    const running = [{ zone: 3, secondsRemaining: 600, source: 'panel' }]
+    expect(decodeStatus({ ...goodStatus, running }).running).toEqual(running)
+  })
+
   it('names the waiting zone that is not a number', () => {
     const program = { ...goodStatus.program, waitingZones: [7, '8'] }
     expect(() => decodeStatus({ ...goodStatus, program })).toThrow(/waitingZones\[1\]/)

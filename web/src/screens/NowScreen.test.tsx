@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import NowScreen from './NowScreen'
 import * as client from '../api/client'
 import { ApiError } from '../api/types'
-import { cappedStatus, idleStatus, runningStatus, zoneFixtures } from '../test/fixtures'
+import { cappedStatus, idleStatus, panelStatus, runningStatus, zoneFixtures } from '../test/fixtures'
 
 const refresh = vi.fn()
 
@@ -423,5 +423,43 @@ describe("the zone tile's own Stop button", () => {
     // The pending run marks the screen busy; the running zone's own tile must still allow a stop.
     expect(within(idleTile).getByRole('button', { name: /run/i })).toBeDisabled()
     expect(within(screen.getByTestId('zone-tile-3')).getByRole('button', { name: 'Stop zone 3' })).toBeEnabled()
+  })
+})
+
+describe('NowScreen with a gardener panel run', () => {
+  it('tags the panel row "panel" beside the program row', async () => {
+    render(<NowScreen status={panelStatus} polls={1} refresh={refresh} />)
+
+    const row = await screen.findByTestId('running-zone-3')
+    expect(row).toHaveTextContent('Roses')
+    expect(row).toHaveTextContent('9:00')
+    const tag = within(row).getByText('Panel')
+    expect(tag).toHaveClass('running-row__tag--panel')
+    expect(within(screen.getByTestId('running-zone-5')).getByText('Program')).toBeInTheDocument()
+  })
+
+  it('tags only the panel run tile "panel"', async () => {
+    render(<NowScreen status={panelStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-3')
+    expect(tile).toHaveAttribute('data-running', 'true')
+    expect(within(tile).getByText('Panel')).toBeInTheDocument()
+    expect(within(screen.getByTestId('zone-tile-5')).queryByText('Panel')).toBeNull()
+    expect(within(screen.getByTestId('zone-tile-1')).queryByText('Panel')).toBeNull()
+  })
+
+  it('leaves the tile tag absent for a manual run', async () => {
+    render(<NowScreen status={cappedStatus} polls={1} refresh={refresh} />)
+    expect(within(await screen.findByTestId('zone-tile-1')).queryByText('Panel')).toBeNull()
+  })
+
+  it('keeps the panel run tile stoppable', async () => {
+    const user = userEvent.setup()
+    const stopZone = vi.spyOn(client, 'stopZone').mockResolvedValue(undefined)
+    render(<NowScreen status={panelStatus} polls={1} refresh={refresh} />)
+
+    const tile = await screen.findByTestId('zone-tile-3')
+    await user.click(within(tile).getByRole('button', { name: 'Stop zone 3' }))
+    expect(stopZone).toHaveBeenCalledWith(3)
   })
 })

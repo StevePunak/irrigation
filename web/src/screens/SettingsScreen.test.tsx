@@ -217,6 +217,46 @@ describe('SettingsScreen', () => {
     expect(putSettings).not.toHaveBeenCalled()
   })
 
+  it('shows a gardener panel run time of 10 minutes when the setting is absent', async () => {
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    expect(await screen.findByLabelText(/gardener panel run time/i)).toHaveValue(10)
+  })
+
+  it('reads the stored gardener panel run time', async () => {
+    vi.spyOn(client, 'getSettings').mockResolvedValue({ master_enabled: '1', panel_run_minutes: '25' })
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    expect(await screen.findByLabelText(/gardener panel run time/i)).toHaveValue(25)
+  })
+
+  it('saves the gardener panel run time as a string', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const field = await screen.findByLabelText(/gardener panel run time/i)
+    await user.clear(field)
+    await user.type(field, '15')
+    await user.click(screen.getByRole('button', { name: 'Save panel run time' }))
+
+    await waitFor(() => {
+      expect(putSettings).toHaveBeenCalledWith({ panel_run_minutes: '15' })
+    })
+  })
+
+  it.each(['0', '61'])('refuses a gardener panel run time of %s', async (value) => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const field = await screen.findByLabelText(/gardener panel run time/i)
+    await user.clear(field)
+    await user.type(field, value)
+    await user.click(screen.getByRole('button', { name: 'Save panel run time' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/1 to 60/)
+    expect(putSettings).not.toHaveBeenCalled()
+  })
+
   it('shows no settings values when they could not be loaded', async () => {
     vi.spyOn(client, 'getSettings').mockRejectedValue(new Error('controller unreachable'))
 

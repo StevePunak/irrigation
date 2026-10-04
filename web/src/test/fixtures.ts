@@ -43,6 +43,15 @@ export const cappedStatus: Status = {
   queue: [{ programId: 1, name: 'Summer', queuedAtUtc: '2026-09-14T13:00:04Z' }],
 }
 
+/** Zone 3 runs from the gardener panel beside program zone 5. */
+export const panelStatus: Status = {
+  ...idleStatus,
+  running: [
+    { zone: 3, secondsRemaining: 540, source: 'panel' },
+    { zone: 5, secondsRemaining: 1712, source: 'program' },
+  ],
+}
+
 export const morningProgram: Program = {
   id: 1,
   name: 'Morning',
