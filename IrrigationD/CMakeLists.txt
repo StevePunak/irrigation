@@ -18,6 +18,7 @@ qt_add_executable(${PROJ}
     src/stopbutton.h          src/stopbutton.cpp
     src/panelformat.h         src/panelformat.cpp
     src/tm1637display.h       src/tm1637display.cpp
+    src/runbutton.h           src/runbutton.cpp
     src/programrunner.h       src/programrunner.cpp
     src/programqueue.h        src/programqueue.cpp
     src/runrequest.h          src/runrequest.cpp
