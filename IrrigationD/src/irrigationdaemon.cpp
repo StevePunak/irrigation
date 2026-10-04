@@ -157,8 +157,6 @@ void IrrigationDaemon::threadAboutToFinish()
     delete _programQueue;
     _programQueue = nullptr;
 
-    // isTornDown() guards onSettingsChanged()'s unchecked _panelHost dereference, so both
-    // are deleted only after _programQueue is nulled.
     delete _panel;
     _panel = nullptr;
 
