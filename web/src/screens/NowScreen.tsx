@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getZones, runZone, stopAll, stopZone } from '../api/client'
-import type { RunningProgram, RunningZone, Zone } from '../api/types'
+import type { RunSource, RunningProgram, RunningZone, Zone } from '../api/types'
 import StopButton from '../components/StopButton'
 import ZoneTile from '../components/ZoneTile'
 import { useCountdown } from '../hooks/useCountdown'
@@ -9,6 +9,11 @@ import type { ScreenProps } from './screenProps'
 
 export const QUICK_RUN_CHOICES = [60, 300, 600, 900, 1200, 1800]
 const DEFAULT_QUICK_RUN = 600
+const SOURCE_LABELS: Record<RunSource, string> = {
+  program: 'Program',
+  manual: 'Manual',
+  panel: 'Panel',
+}
 
 /** Reads "Morning Drip — step 1 of 2, zone 7 waiting". */
 export function programLine(program: RunningProgram): string {
@@ -35,8 +40,8 @@ function RunningRow({ entry, name, polls, onStop }: RunningRowProps) {
       <span className="running-row__zone">
         Zone {entry.zone} — {name}
       </span>
-      <span className={`running-row__tag running-row__tag--${entry.source}`}>
-        {entry.source === 'program' ? 'Program' : 'Manual'}
+      <span className={`tag running-row__tag running-row__tag--${entry.source}`}>
+        {SOURCE_LABELS[entry.source]}
       </span>
       <span className="running__clock">{formatCountdown(remaining)}</span>
       <button
@@ -201,12 +206,14 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
       <div className="zone-grid">
         {zones.map((entry) => {
-          const open = running.some((item) => item.zone === entry.number)
+          const source = running.find((item) => item.zone === entry.number)?.source
+          const open = source !== undefined
           return (
             <ZoneTile
               key={entry.number}
               zone={entry}
               running={open}
+              panel={source === 'panel'}
               disabled={busy || (atCap && open === false)}
               onRun={onRun}
               onStop={onStopZone}

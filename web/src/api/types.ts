@@ -2,7 +2,7 @@ export type DayMode = 'DaysOfWeek' | 'Odd' | 'Even' | 'EveryNDays'
 
 export const DAY_MODES: readonly DayMode[] = ['DaysOfWeek', 'Odd', 'Even', 'EveryNDays']
 
-export type RunSource = 'program' | 'manual'
+export type RunSource = 'program' | 'manual' | 'panel'
 
 /** One open valve. `zone` is the zone number. */
 export interface RunningZone {

@@ -83,7 +83,7 @@ function numbers(value: unknown, field: string): number[] {
 function decodeRunningZone(element: unknown, field: string): RunningZone {
   const source = asRecord(element, field)
   const runSource = str(source, 'source', field)
-  if (runSource !== 'program' && runSource !== 'manual') {
+  if (runSource !== 'program' && runSource !== 'manual' && runSource !== 'panel') {
     throw new DecodeError(`${field}.source`, `unknown source "${runSource}"`)
   }
   return {
