@@ -300,6 +300,20 @@ describe('StopButton', () => {
     expect(stopAll).toHaveBeenCalledTimes(1)
   })
 
+  it('is absent while the controller is idle', async () => {
+    render(<NowScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByText(/no zone running/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'STOP' })).toBeNull()
+  })
+
+  it('appears for a queued program with no zone open', async () => {
+    const queuedOnly = { ...idleStatus, queue: cappedStatus.queue }
+    render(<NowScreen status={queuedOnly} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByRole('button', { name: 'STOP' })).toBeEnabled()
+  })
+
   it('reports a stop the daemon refused', async () => {
     const user = userEvent.setup()
     vi.spyOn(client, 'stopAll').mockRejectedValue(new ApiError(500, 'could not close the bank'))

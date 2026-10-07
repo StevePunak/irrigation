@@ -221,15 +221,14 @@ option {
 }
 
 .stop {
-  min-height: 96px;
+  min-height: var(--touch);
   border: 0;
   border-radius: var(--radius);
   background: var(--danger);
   color: var(--danger-ink);
-  font-size: 2rem;
+  font-size: 1.1rem;
   font-weight: 800;
   letter-spacing: 0.08em;
-  box-shadow: 0 6px 24px rgba(224, 72, 61, 0.35);
 }
 
 .stop:hover:not(:disabled) {

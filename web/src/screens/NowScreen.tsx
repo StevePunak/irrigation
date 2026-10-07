@@ -130,6 +130,9 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
   const atCap = status !== null && running.length >= cap
   const nameOf = (zoneNumber: number) => zones.find((zone) => zone.number === zoneNumber)?.name ?? ''
   const zoneId = status?.timezone ?? ''
+  // An unknown status keeps STOP on screen: a failing poll can hide a valve that is open.
+  const stoppable =
+    status === null || running.length > 0 || status.program !== null || status.queue.length > 0
 
   return (
     <section className="screen">
@@ -171,7 +174,7 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
         ) : null}
       </div>
 
-      <StopButton onStop={onStop} busy={busy} />
+      {stoppable ? <StopButton onStop={onStop} busy={busy} /> : null}
 
       <div className="next-run" data-testid="next-run">
         Next run:{' '}
