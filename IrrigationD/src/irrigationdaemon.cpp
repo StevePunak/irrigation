@@ -1,5 +1,7 @@
 #include "irrigationdaemon.h"
 
+#include "climatelogger.h"
+#include "database/climatedatasource.h"
 #include "database/irrigationdatasource.h"
 #include "irrigationcontrolserver.h"
 #include "irrigationsettings.h"
@@ -9,6 +11,7 @@
 #include "programrunner.h"
 #include "runbutton.h"
 #include "scheduler.h"
+#include "sht30.h"
 #include "stopbutton.h"
 #include "tm1637display.h"
 #include "zonecontroller.h"
@@ -102,6 +105,8 @@ void IrrigationDaemon::threadStarted()
 
         applyRuntimeSettings();
 
+        setUpClimate();
+
         _programRunner = new ProgramRunner(_zoneController, _dataSource);
         _programQueue = new ProgramQueue(_programRunner, _dataSource, &_clock);
         _programQueue->recordRestartDrops();
@@ -164,6 +169,16 @@ void IrrigationDaemon::threadAboutToFinish()
     delete _panelTimer;
     _panelTimer = nullptr;
 
+    // ~ClimateLogger commits its pending readings, so it goes before the store.
+    delete _climateLogger;
+    _climateLogger = nullptr;
+
+    delete _climateStore;
+    _climateStore = nullptr;
+
+    delete _climateSensor;
+    _climateSensor = nullptr;
+
     // The queue goes before the runner aborts: an aborted program starts the next queued
     // one, and nothing may open a valve during teardown.
     delete _programQueue;
@@ -220,6 +235,33 @@ void IrrigationDaemon::threadAboutToFinish()
 
     delete _settings;
     _settings = nullptr;
+}
+
+void IrrigationDaemon::setUpClimate()
+{
+    const int bus = _settings->climateBus();
+    if(bus < 0) {
+        logText(LVL_INFO, "No climate sensor is configured");
+        return;
+    }
+
+    const QString path = _settings->climateDatabasePath();
+    _climateStore = new ClimateDataSource(path);
+    if(_climateStore->open() == false) {
+        logText(LVL_ERROR, QString("Failed to open the climate database '%1', so climate logging is off: %2")
+                               .arg(path, _climateStore->errorText()));
+        delete _climateStore;
+        _climateStore = nullptr;
+        return;
+    }
+
+    _climateSensor = new Sht30(bus, _settings->climateAddress());
+    _climateLogger = new ClimateLogger(_climateSensor, _climateStore, &_clock,
+                                       _settings->climateSampleSeconds(), ClimateFlushSeconds);
+    _climateLogger->start();
+    logText(LVL_INFO, QString("Logging climate from 0x%1 on I2C bus %2 every %3 s to %4")
+                          .arg(static_cast<uint>(_settings->climateAddress()), 2, 16, QChar('0'))
+                          .arg(bus).arg(_settings->climateSampleSeconds()).arg(path));
 }
 
 void IrrigationDaemon::connectComponents()

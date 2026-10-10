@@ -163,3 +163,12 @@ irrigation_add_test(tst_panelhost
     ../src/model/programstep.cpp
     ../src/model/firedinstant.cpp
 )
+
+irrigation_add_test(tst_climate
+    tst_climate.cpp
+    ../src/sht30.cpp
+    ../src/climatelogger.cpp
+    ../src/irrigationsettings.cpp
+    ../src/database/climatedatasource.cpp
+    ../src/database/irrigation.qrc
+)

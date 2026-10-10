@@ -63,6 +63,18 @@ public:
      */
     QString databaseMountPoint() const { return _settings.value(KEY_DATABASE_MOUNT_POINT).toString(); }
 
+    /** @brief Returns the I2C bus number of the climate sensor, or -1 when climate/bus is missing or malformed. */
+    int climateBus() const;
+
+    /** @brief Returns the climate sensor's I2C address. climate/address accepts decimal or 0x hex; the default is 0x44. */
+    quint8 climateAddress() const;
+
+    /** @brief Returns the seconds between climate samples, at least 1. The default is 5. */
+    int climateSampleSeconds() const;
+
+    /** @brief Returns the path of the climate database, by default climate.db beside the irrigation database. */
+    QString climateDatabasePath() const;
+
 private:
     int lineOffset(const QString& key) const;
 
@@ -78,6 +90,10 @@ private:
     static const QString KEY_LISTEN_PORT;
     static const QString KEY_DATABASE_PATH;
     static const QString KEY_DATABASE_MOUNT_POINT;
+    static const QString KEY_CLIMATE_BUS;
+    static const QString KEY_CLIMATE_ADDRESS;
+    static const QString KEY_CLIMATE_SAMPLE_SECONDS;
+    static const QString KEY_CLIMATE_DATABASE_PATH;
 };
 
 #endif // IRRIGATIONSETTINGS_H

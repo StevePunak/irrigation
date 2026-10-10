@@ -11,6 +11,8 @@
 #include <QDateTime>
 #include <QString>
 
+class ClimateDataSource;
+class ClimateLogger;
 class IGpioBackend;
 class IrrigationControlServer;
 class IrrigationDataSource;
@@ -21,6 +23,7 @@ class ProgramQueue;
 class ProgramRunner;
 class QTimer;
 class RunButton;
+class Sht30;
 class Scheduler;
 class StopButton;
 class Tm1637Display;
@@ -93,6 +96,14 @@ private:
     void setUpPanel();
 
     /**
+     * @brief Opens the climate database and starts sampling, when climate/bus is configured.
+     *
+     * A database that fails to open is logged and leaves climate logging off; the daemon
+     * runs on without it.
+     */
+    void setUpClimate();
+
+    /**
      * @brief Returns whether threadAboutToFinish() has deleted the components.
      *
      * @warning A request the control server queued before it stopped can still be
@@ -125,6 +136,7 @@ private:
     static constexpr int FiredInstantRetentionDays = 90;
     static constexpr int PanelTickMilliseconds = 100;
     static constexpr int PanelRefreshMilliseconds = 1000;
+    static constexpr int ClimateFlushSeconds = 60;
 
     QString _settingsPath;
     QString _errorText;
@@ -147,6 +159,9 @@ private:
     PanelController* _panel = nullptr;
     QTimer* _panelTimer = nullptr;
     QTimer* _panelRefreshTimer = nullptr;
+    Sht30* _climateSensor = nullptr;
+    ClimateDataSource* _climateStore = nullptr;
+    ClimateLogger* _climateLogger = nullptr;
     int _panelRunMinutes = 0;
     bool _displayFailing = false;
 };
