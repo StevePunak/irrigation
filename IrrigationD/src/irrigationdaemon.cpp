@@ -646,6 +646,16 @@ void IrrigationDaemon::publishStatus()
         status.nextRunUtc = nextScheduledRunUtc(rainDelayed == true ? status.rainDelayUntilUtc : nowUtc);
     }
 
+    if(_climateLogger != nullptr) {
+        status.climateConfigured = true;
+        ClimateReading reading;
+        if(_climateLogger->latestReading(reading, ClimateStaleSeconds)) {
+            status.climateFresh = true;
+            status.temperatureCelsius = reading.temperatureCelsius;
+            status.humidityPercent = reading.humidityPercent;
+        }
+    }
+
     _controlServer->updateStatus(status);
 }
 

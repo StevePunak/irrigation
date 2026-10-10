@@ -2,6 +2,7 @@ import {
   DAY_MODES,
   DecodeError,
   type DayMode,
+  type Climate,
   type Program,
   type ProgramStartTime,
   type ProgramStep,
@@ -117,6 +118,22 @@ function decodeQueuedProgram(element: unknown, field: string): QueuedProgram {
   }
 }
 
+function nullableNum(source: Record<string, unknown>, key: string, field: string): number | null {
+  return source[key] === null ? null : num(source, key, field)
+}
+
+/** A daemon older than the climate logger omits the key, which reads as no sensor. */
+function decodeClimate(value: unknown, field: string): Climate | null {
+  if (value === undefined || value === null) {
+    return null
+  }
+  const source = asRecord(value, field)
+  return {
+    temperatureC: nullableNum(source, 'temperatureC', field),
+    humidityPercent: nullableNum(source, 'humidityPercent', field),
+  }
+}
+
 export function decodeStatus(payload: unknown): Status {
   const source = asRecord(payload, 'status')
   return {
@@ -132,6 +149,7 @@ export function decodeStatus(payload: unknown): Status {
     timezone: str(source, 'timezone', 'status'),
     masterEnabled: bool(source, 'masterEnabled', 'status'),
     rainDelayUntilUtc: instant(source, 'rainDelayUntilUtc', 'status'),
+    climate: decodeClimate(source['climate'], 'status.climate'),
   }
 }
 

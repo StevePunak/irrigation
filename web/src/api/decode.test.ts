@@ -32,6 +32,31 @@ describe('decodeStatus', () => {
     expect(status.masterEnabled).toBe(true)
   })
 
+  it('reads a fresh climate reading', () => {
+    expect(decodeStatus({ ...goodStatus, climate: { temperatureC: 25.4, humidityPercent: 65.5 } }).climate).toEqual({
+      temperatureC: 25.4,
+      humidityPercent: 65.5,
+    })
+  })
+
+  it('keeps null climate values as a sensor with no fresh reading', () => {
+    expect(decodeStatus({ ...goodStatus, climate: { temperatureC: null, humidityPercent: null } }).climate).toEqual({
+      temperatureC: null,
+      humidityPercent: null,
+    })
+  })
+
+  it('reads a null or absent climate as no sensor', () => {
+    expect(decodeStatus({ ...goodStatus, climate: null }).climate).toBeNull()
+    expect(decodeStatus(goodStatus).climate).toBeNull()
+  })
+
+  it('throws when a climate value arrives as a string', () => {
+    expect(() =>
+      decodeStatus({ ...goodStatus, climate: { temperatureC: '25.4', humidityPercent: 65.5 } }),
+    ).toThrow(/status\.climate\.temperatureC/)
+  })
+
   it('reads a null program as no program running', () => {
     expect(decodeStatus({ ...goodStatus, program: null }).program).toBeNull()
   })

@@ -52,7 +52,7 @@ struct QueuedProgramStatus
  * @brief Snapshot of the daemon's runtime state, published through updateStatus() and served by GET /admin/status.
  *
  * programId is zero when no program runs. running is ordered by zone number. waitingZones
- * holds zone numbers.
+ * holds zone numbers. The temperature and humidity are meaningful only while climateFresh.
  */
 struct ServerStatus
 {
@@ -69,6 +69,10 @@ struct ServerStatus
     bool masterEnabled = false;
     bool stopHeld = false;
     QDateTime rainDelayUntilUtc;
+    bool climateConfigured = false;
+    bool climateFresh = false;
+    double temperatureCelsius = 0;
+    double humidityPercent = 0;
 };
 
 Q_DECLARE_METATYPE(ServerStatus)

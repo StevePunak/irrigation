@@ -137,6 +137,7 @@ private:
     static constexpr int PanelTickMilliseconds = 100;
     static constexpr int PanelRefreshMilliseconds = 1000;
     static constexpr int ClimateFlushSeconds = 60;
+    static constexpr int ClimateStaleSeconds = 30;
 
     QString _settingsPath;
     QString _errorText;

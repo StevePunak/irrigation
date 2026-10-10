@@ -26,6 +26,12 @@ export interface QueuedProgram {
   queuedAtUtc: string | null
 }
 
+/** The outdoor sensor. Both values are null while the sensor has no fresh reading. */
+export interface Climate {
+  temperatureC: number | null
+  humidityPercent: number | null
+}
+
 export interface Status {
   running: RunningZone[]
   program: RunningProgram | null
@@ -35,6 +41,8 @@ export interface Status {
   timezone: string
   masterEnabled: boolean
   rainDelayUntilUtc: string | null
+  /** Null when the controller has no sensor configured. */
+  climate: Climate | null
 }
 
 export interface Zone {

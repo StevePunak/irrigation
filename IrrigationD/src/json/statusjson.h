@@ -6,7 +6,12 @@
 
 #include "irrigationcontrolserver.h"
 
-/** @brief Converts ServerStatus into the wire shape decoded by the web client's Status type. */
+/**
+ * @brief Converts ServerStatus into the wire shape decoded by the web client's Status type.
+ *
+ * climate is null when no sensor is configured, and its two values are null while the
+ * sensor has no fresh reading.
+ */
 class StatusJson
 {
 public:

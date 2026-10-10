@@ -25,6 +25,7 @@ export const idleStatus: Status = {
   timezone: 'America/Los_Angeles',
   masterEnabled: true,
   rainDelayUntilUtc: null,
+  climate: null,
 }
 
 export const runningStatus: Status = {

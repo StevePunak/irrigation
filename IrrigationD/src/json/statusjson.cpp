@@ -50,6 +50,15 @@ QJsonObject StatusJson::toJson(const ServerStatus& status)
     object["masterEnabled"] = status.masterEnabled;
     object["stopHeld"] = status.stopHeld;
     object["rainDelayUntilUtc"] = instantToJson(status.rainDelayUntilUtc);
+
+    QJsonValue climate = QJsonValue(QJsonValue::Null);
+    if(status.climateConfigured == true) {
+        QJsonObject entry;
+        entry["temperatureC"] = status.climateFresh ? QJsonValue(status.temperatureCelsius) : QJsonValue(QJsonValue::Null);
+        entry["humidityPercent"] = status.climateFresh ? QJsonValue(status.humidityPercent) : QJsonValue(QJsonValue::Null);
+        climate = entry;
+    }
+    object["climate"] = climate;
     return object;
 }
 

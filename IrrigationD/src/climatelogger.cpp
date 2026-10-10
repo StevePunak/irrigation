@@ -53,12 +53,23 @@ void ClimateLogger::collect()
 
     reading.atUtc = _clock->nowUtc();
     _pending.append(reading);
+    _latest = reading;
+    _latestMonotonicMsecs = _clock->monotonicMsecs();
 
     if(_failing) {
         _failing = false;
         logText(LVL_INFO, QString("The climate sensor is reading again: %1 C, %2 %RH")
                               .arg(reading.temperatureCelsius, 0, 'f', 1).arg(reading.humidityPercent, 0, 'f', 1));
     }
+}
+
+bool ClimateLogger::latestReading(ClimateReading& reading, int maxAgeSeconds) const
+{
+    if(_latestMonotonicMsecs < 0 || _clock->monotonicMsecs() - _latestMonotonicMsecs > maxAgeSeconds * 1000LL) {
+        return false;
+    }
+    reading = _latest;
+    return true;
 }
 
 void ClimateLogger::flush()

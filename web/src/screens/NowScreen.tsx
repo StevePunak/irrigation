@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getZones, runZone, stopAll, stopZone } from '../api/client'
-import type { RunSource, RunningProgram, RunningZone, Zone } from '../api/types'
+import type { Climate, RunSource, RunningProgram, RunningZone, Zone } from '../api/types'
 import StopButton from '../components/StopButton'
 import ZoneTile from '../components/ZoneTile'
 import { useCountdown } from '../hooks/useCountdown'
@@ -23,6 +23,15 @@ export function programLine(program: RunningProgram): string {
     return base
   }
   return `${base}, ${waiting.length === 1 ? 'zone' : 'zones'} ${waiting.join(', ')} waiting`
+}
+
+/** Reads "78°F · 66%" in whole units, or names a sensor with no fresh reading. */
+export function climateLine(climate: Climate): string {
+  if (climate.temperatureC === null || climate.humidityPercent === null) {
+    return 'Sensor not reading'
+  }
+  const fahrenheit = Math.round((climate.temperatureC * 9) / 5 + 32)
+  return `${fahrenheit}°F · ${Math.round(climate.humidityPercent)}%`
 }
 
 interface RunningRowProps {
@@ -136,7 +145,18 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
   return (
     <section className="screen">
-      <h1>Now</h1>
+      <header className="now-header">
+        <h1>Now</h1>
+        {status?.climate ? (
+          <span
+            className={`climate${status.climate.temperatureC === null ? ' climate--stale' : ''}`}
+            data-testid="climate"
+            title="Outdoor temperature and relative humidity"
+          >
+            {climateLine(status.climate)}
+          </span>
+        ) : null}
+      </header>
 
       {error === null ? null : (
         <div className="alert" role="alert">

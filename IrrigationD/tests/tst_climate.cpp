@@ -349,6 +349,47 @@ private slots:
         QCOMPARE(stored.first().atUtc, START.addSecs(3 * 5));
     }
 
+    void loggerReportsTheLatestReadingUntilItGoesStale()
+    {
+        QTemporaryDir dir;
+        ClimateDataSource store(dir.filePath("climate.db"));
+        QVERIFY(store.open());
+        FakeSensor sensor;
+        TestClock clock(START);
+        ClimateLogger logger(&sensor, &store, &clock, 5, 60);
+
+        ClimateReading reading;
+        QCOMPARE(logger.latestReading(reading, 30), false);
+
+        logger.collect();
+        clock.advance(30);
+        QVERIFY(logger.latestReading(reading, 30));
+        QCOMPARE(reading.temperatureCelsius, 31.5);
+        QCOMPARE(reading.humidityPercent, 52.5);
+
+        clock.advanceMsecs(1);
+        QCOMPARE(logger.latestReading(reading, 30), false);
+    }
+
+    void loggerKeepsTheLastGoodReadingThroughAFailedRead()
+    {
+        QTemporaryDir dir;
+        ClimateDataSource store(dir.filePath("climate.db"));
+        QVERIFY(store.open());
+        FakeSensor sensor;
+        sensor.readResults = { true, false };
+        TestClock clock(START);
+        ClimateLogger logger(&sensor, &store, &clock, 5, 60);
+
+        logger.collect();
+        sensor.temperature = 99.0;
+        logger.collect();
+
+        ClimateReading reading;
+        QVERIFY(logger.latestReading(reading, 30));
+        QCOMPARE(reading.temperatureCelsius, 31.5);
+    }
+
     void loggerCommitsPendingReadingsWhenDestroyed()
     {
         QTemporaryDir dir;

@@ -51,6 +51,13 @@ public:
     /** @brief Returns the readings collected and not yet committed. */
     int pendingCount() const { return static_cast<int>(_pending.count()); }
 
+    /**
+     * @brief Returns the most recent good reading through @p reading.
+     * @return False when there is none, or it was collected more than @p maxAgeSeconds ago
+     *         on the monotonic clock.
+     */
+    bool latestReading(ClimateReading& reading, int maxAgeSeconds) const;
+
 public slots:
     /** @brief Starts one measurement and arms the collect timer. */
     void sample();
@@ -71,6 +78,8 @@ private:
     QTimer _collectTimer;
     QTimer _flushTimer;
     ClimateReadingList _pending;
+    ClimateReading _latest;
+    qint64 _latestMonotonicMsecs = -1;
     bool _failing = false;
 };
 

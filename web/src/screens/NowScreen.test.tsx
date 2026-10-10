@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import NowScreen from './NowScreen'
+import NowScreen, { climateLine } from './NowScreen'
 import * as client from '../api/client'
 import { ApiError } from '../api/types'
 import { cappedStatus, idleStatus, panelStatus, runningStatus, zoneFixtures } from '../test/fixtures'
@@ -54,6 +54,30 @@ describe('NowScreen idle', () => {
     render(<NowScreen status={idleStatus} polls={1} refresh={refresh} />)
     expect(await screen.findByText('Roses')).toBeInTheDocument()
     expect(screen.getByText('Front lawn')).toBeInTheDocument()
+  })
+})
+
+describe('NowScreen climate', () => {
+  it('shows the outdoor reading in whole Fahrenheit and percent', async () => {
+    const status = { ...idleStatus, climate: { temperatureC: 25.4, humidityPercent: 65.5 } }
+    render(<NowScreen status={status} polls={1} refresh={refresh} />)
+    expect(await screen.findByTestId('climate')).toHaveTextContent('78°F · 66%')
+  })
+
+  it('says the sensor is not reading when the values are null', async () => {
+    const status = { ...idleStatus, climate: { temperatureC: null, humidityPercent: null } }
+    render(<NowScreen status={status} polls={1} refresh={refresh} />)
+    expect(await screen.findByTestId('climate')).toHaveTextContent(/sensor not reading/i)
+  })
+
+  it('shows nothing when no sensor is configured', async () => {
+    render(<NowScreen status={idleStatus} polls={1} refresh={refresh} />)
+    expect(await screen.findByText(/no zone running/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('climate')).toBeNull()
+  })
+
+  it('rounds freezing to 32°F', () => {
+    expect(climateLine({ temperatureC: 0, humidityPercent: 99.6 })).toBe('32°F · 100%')
   })
 })
 

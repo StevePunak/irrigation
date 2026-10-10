@@ -460,6 +460,9 @@ private slots:
     void statusFieldTypesMatchTheWebDecoder();
     void updateStatusFromTheTestThreadAppearsInTheNextStatusGet();
     void statusNamesAPanelRunPanel();
+    void climateSerializesAsNullWhenNoSensorIsConfigured();
+    void climateCarriesAFreshReading();
+    void climateNullsBothValuesWithoutAFreshReading();
     void sourceToJsonNamesAllThreeSources();
 
     void zonesGetListsAllEightSeededZones();
@@ -693,7 +696,7 @@ void TestControlServer::statusKeySetMatchesTheSerializer()
     std::sort(keys.begin(), keys.end());
 
     const QStringList expected = {
-        "masterEnabled", "maxConcurrentZones", "nextRunUtc", "program", "queue",
+        "climate", "masterEnabled", "maxConcurrentZones", "nextRunUtc", "program", "queue",
         "rainDelayUntilUtc", "running", "stopHeld", "timezone"
     };
     QCOMPARE(keys, expected);
@@ -720,6 +723,7 @@ void TestControlServer::statusFieldTypesMatchTheWebDecoder()
     QVERIFY(body.value("masterEnabled").isBool());
     QVERIFY(body.value("stopHeld").isBool());
     QVERIFY(body.value("rainDelayUntilUtc").isString());
+    QVERIFY(body.value("climate").isNull());
 
     server.stop(TimeSpan::fromSeconds(5));
 }
@@ -846,6 +850,38 @@ void TestControlServer::statusNamesAPanelRunPanel()
     QCOMPARE(running.at(1).toObject().value("source").toString(), QString("program"));
 
     server.stop(TimeSpan::fromSeconds(5));
+}
+
+void TestControlServer::climateSerializesAsNullWhenNoSensorIsConfigured()
+{
+    ServerStatus status;
+    QVERIFY(StatusJson::toJson(status).value("climate").isNull());
+}
+
+void TestControlServer::climateCarriesAFreshReading()
+{
+    ServerStatus status;
+    status.climateConfigured = true;
+    status.climateFresh = true;
+    status.temperatureCelsius = 25.4;
+    status.humidityPercent = 65.5;
+
+    const QJsonObject climate = StatusJson::toJson(status).value("climate").toObject();
+    QCOMPARE(climate.keys(), QStringList({ "humidityPercent", "temperatureC" }));
+    QCOMPARE(climate.value("temperatureC").toDouble(), 25.4);
+    QCOMPARE(climate.value("humidityPercent").toDouble(), 65.5);
+}
+
+void TestControlServer::climateNullsBothValuesWithoutAFreshReading()
+{
+    ServerStatus status;
+    status.climateConfigured = true;
+    status.temperatureCelsius = 25.4;
+    status.humidityPercent = 65.5;
+
+    const QJsonObject climate = StatusJson::toJson(status).value("climate").toObject();
+    QVERIFY(climate.value("temperatureC").isNull());
+    QVERIFY(climate.value("humidityPercent").isNull());
 }
 
 void TestControlServer::sourceToJsonNamesAllThreeSources()
