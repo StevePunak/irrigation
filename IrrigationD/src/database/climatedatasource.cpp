@@ -107,3 +107,58 @@ ClimateReadingList ClimateDataSource::readingsBetween(const QDateTime& fromUtc, 
     }
     return result;
 }
+
+ClimateBucketList ClimateDataSource::bucketsBetween(const QDateTime& fromUtc, const QDateTime& toUtc, int bucketSeconds)
+{
+    ClimateBucketList result;
+    if(bucketSeconds <= 0) {
+        return result;
+    }
+
+    bool success = false;
+    QSqlQuery query = prepareQuery(
+        "SELECT (at_utc / :width) * :width AS start, count(*), "
+        "min(temperature_c), avg(temperature_c), max(temperature_c), "
+        "min(humidity_pct), avg(humidity_pct), max(humidity_pct) "
+        "FROM readings WHERE at_utc >= :from AND at_utc < :to "
+        "GROUP BY start ORDER BY start",
+        &success);
+    if(success == false) {
+        return result;
+    }
+
+    query.bindValue(":width", bucketSeconds);
+    query.bindValue(":from", fromUtc.toSecsSinceEpoch());
+    query.bindValue(":to", toUtc.toSecsSinceEpoch());
+    if(executeQuery(query) == false) {
+        return result;
+    }
+
+    while(query.next()) {
+        ClimateBucket bucket;
+        bucket.startUtc = QDateTime::fromSecsSinceEpoch(query.value(0).toLongLong(), QTimeZone::UTC);
+        bucket.count = query.value(1).toInt();
+        bucket.temperatureMin = query.value(2).toDouble();
+        bucket.temperatureMean = query.value(3).toDouble();
+        bucket.temperatureMax = query.value(4).toDouble();
+        bucket.humidityMin = query.value(5).toDouble();
+        bucket.humidityMean = query.value(6).toDouble();
+        bucket.humidityMax = query.value(7).toDouble();
+        result.append(bucket);
+    }
+    return result;
+}
+
+int ClimateDataSource::bucketSecondsFor(qint64 spanSeconds, int maximumBuckets)
+{
+    static const QList<int> Widths = {
+        60, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800
+    };
+
+    for(int width : Widths) {
+        if((spanSeconds + width - 1) / width <= maximumBuckets) {
+            return width;
+        }
+    }
+    return Widths.last();
+}

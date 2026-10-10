@@ -443,3 +443,178 @@ option {
   color: var(--warn);
   font-size: 0.9rem;
 }
+
+.climate-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.climate-ranges button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.climate-ranges button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--ground);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.climate-empty {
+  margin: 0;
+  color: var(--ink-dim);
+}
+
+.climate-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+}
+
+.climate-readout__when {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.climate-readout__value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.climate-readout__key {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.climate-readout__key--temperature {
+  background: var(--temperature);
+}
+
+.climate-readout__key--humidity {
+  background: var(--humidity);
+}
+
+.climate-charts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  transition: opacity 0.2s;
+}
+
+.climate-charts--loading {
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .climate-charts {
+    transition: none;
+  }
+}
+
+.climate-chart {
+  margin: 0;
+  padding: var(--gap) var(--gap) 4px;
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius);
+  background: var(--chart-surface);
+}
+
+.climate-chart__title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.climate-chart__unit {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.climate-chart__plot {
+  width: 100%;
+  overflow: hidden;
+}
+
+.climate-chart__plot svg {
+  display: block;
+  max-width: 100%;
+}
+
+.climate-chart__plot svg:focus-visible {
+  outline-offset: 0;
+}
+
+.climate-chart__grid {
+  stroke: var(--line);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.climate-chart__tick {
+  fill: var(--ink-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.climate-chart__crosshair {
+  stroke: var(--ink-dim);
+  stroke-width: 1;
+}
+
+.climate-table summary {
+  min-height: var(--touch);
+  display: flex;
+  align-items: center;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.climate-table__scroll {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.climate-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.climate-table th,
+.climate-table td {
+  padding: 6px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--glass-edge);
+  white-space: nowrap;
+}
+
+.climate-table th:first-child,
+.climate-table td:first-child {
+  text-align: left;
+}
+
+.climate-table th {
+  position: sticky;
+  top: 0;
+  background: var(--chart-surface);
+  color: var(--ink-dim);
+  font-weight: 700;
+}

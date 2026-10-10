@@ -3,6 +3,9 @@ import {
   DecodeError,
   type DayMode,
   type Climate,
+  type ClimateBucket,
+  type ClimateHistory,
+  type ClimateRange,
   type Program,
   type ProgramStartTime,
   type ProgramStep,
@@ -150,6 +153,33 @@ export function decodeStatus(payload: unknown): Status {
     masterEnabled: bool(source, 'masterEnabled', 'status'),
     rainDelayUntilUtc: instant(source, 'rainDelayUntilUtc', 'status'),
     climate: decodeClimate(source['climate'], 'status.climate'),
+  }
+}
+
+function decodeClimateRange(value: unknown, field: string): ClimateRange {
+  const source = asRecord(value, field)
+  return { min: num(source, 'min', field), mean: num(source, 'mean', field), max: num(source, 'max', field) }
+}
+
+function decodeClimateBucket(element: unknown, field: string): ClimateBucket {
+  const source = asRecord(element, field)
+  return {
+    startUtc: str(source, 'startUtc', field),
+    count: num(source, 'count', field),
+    temperatureC: decodeClimateRange(source['temperatureC'], `${field}.temperatureC`),
+    humidityPercent: decodeClimateRange(source['humidityPercent'], `${field}.humidityPercent`),
+  }
+}
+
+export function decodeClimateHistory(payload: unknown): ClimateHistory {
+  const source = asRecord(payload, 'climate')
+  return {
+    fromUtc: str(source, 'fromUtc', 'climate'),
+    toUtc: str(source, 'toUtc', 'climate'),
+    bucketSeconds: num(source, 'bucketSeconds', 'climate'),
+    buckets: asArray(source['buckets'], 'climate.buckets').map((element, index) =>
+      decodeClimateBucket(element, `climate.buckets[${index}]`),
+    ),
   }
 }
 

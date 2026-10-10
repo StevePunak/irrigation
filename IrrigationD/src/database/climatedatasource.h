@@ -3,6 +3,7 @@
 
 #include <Kanoop/database/datasource.h>
 
+#include "model/climatebucket.h"
 #include "model/climatereading.h"
 
 /**
@@ -33,6 +34,15 @@ public:
 
     /** @brief Returns the readings taken at or after @p fromUtc and before @p toUtc, oldest first. */
     ClimateReadingList readingsBetween(const QDateTime& fromUtc, const QDateTime& toUtc);
+
+    /**
+     * @brief Returns the readings taken at or after @p fromUtc and before @p toUtc, grouped into
+     *        @p bucketSeconds-wide buckets aligned to the epoch, oldest first. Empty buckets are omitted.
+     */
+    ClimateBucketList bucketsBetween(const QDateTime& fromUtc, const QDateTime& toUtc, int bucketSeconds);
+
+    /** @brief Returns the narrowest standard bucket width that splits @p spanSeconds into at most @p maximumBuckets buckets. */
+    static int bucketSecondsFor(qint64 spanSeconds, int maximumBuckets);
 
 protected:
     /** @brief Returns the full create-from-scratch schema. */

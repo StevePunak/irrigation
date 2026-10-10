@@ -117,6 +117,9 @@ void IrrigationDaemon::threadStarted()
         _controlServer = new IrrigationControlServer(_settings->databasePath());
         _controlServer->setBindAddress(_settings->bindAddress());
         _controlServer->setListenPort(_settings->listenPort());
+        if(_settings->climateBus() >= 0) {
+            _controlServer->setClimateDatabasePath(_settings->climateDatabasePath());
+        }
 
         _statusTimer = new QTimer();
         _statusTimer->setInterval(static_cast<int>(StatusInterval.totalMilliseconds()));

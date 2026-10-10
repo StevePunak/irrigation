@@ -1,7 +1,8 @@
 import { apiUrl } from './apiPath'
-import { decodePrograms, decodeSettings, decodeStatus, decodeZones } from './decode'
+import { decodeClimateHistory, decodePrograms, decodeSettings, decodeStatus, decodeZones } from './decode'
 import {
   ApiError,
+  type ClimateHistory,
   type Program,
   type ProgramDraft,
   type SettingsMap,
@@ -108,4 +109,9 @@ export async function getSettings(): Promise<SettingsMap> {
 
 export async function putSettings(patch: SettingsMap): Promise<void> {
   await request('/settings', { method: 'PUT', body: patch })
+}
+
+/** Reads the last `hours` of climate history, bucketed by the daemon. A 404 means no sensor is configured. */
+export async function getClimate(hours: number): Promise<ClimateHistory> {
+  return decodeClimateHistory(await request(`/climate?hours=${hours}`))
 }

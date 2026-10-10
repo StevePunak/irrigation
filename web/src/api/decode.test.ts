@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decodePrograms, decodeSettings, decodeStatus, decodeZones } from './decode'
+import { decodeClimateHistory, decodePrograms, decodeSettings, decodeStatus, decodeZones } from './decode'
 import { DecodeError } from './types'
 
 const goodStatus = {
@@ -188,5 +188,36 @@ describe('decodeSettings', () => {
 
   it('throws when a value is not a string', () => {
     expect(() => decodeSettings({ master_enabled: true })).toThrow(/master_enabled/)
+  })
+})
+
+describe('decodeClimateHistory', () => {
+  const wire = {
+    fromUtc: '2026-10-09T18:43:43Z',
+    toUtc: '2026-10-10T18:43:43Z',
+    bucketSeconds: 300,
+    buckets: [
+      {
+        startUtc: '2026-10-10T18:40:00Z',
+        count: 43,
+        temperatureC: { min: 25.7, mean: 25.75, max: 25.8 },
+        humidityPercent: { min: 70.4, mean: 70.8, max: 71.3 },
+      },
+    ],
+  }
+
+  it('decodes the daemon wire shape', () => {
+    const history = decodeClimateHistory(wire)
+    expect(history.bucketSeconds).toBe(300)
+    expect(history.fromUtc).toBe('2026-10-09T18:43:43Z')
+    expect(history.buckets).toHaveLength(1)
+    expect(history.buckets[0]!.temperatureC).toEqual({ min: 25.7, mean: 25.75, max: 25.8 })
+    expect(history.buckets[0]!.humidityPercent.max).toBe(71.3)
+  })
+
+  it('names the field of a malformed bucket', () => {
+    const broken = { ...wire, buckets: [{ ...wire.buckets[0], humidityPercent: { min: 1, max: 2 } }] }
+    expect(() => decodeClimateHistory(broken)).toThrow(DecodeError)
+    expect(() => decodeClimateHistory(broken)).toThrow(/climate\.buckets\[0\]\.humidityPercent\.mean/)
   })
 })

@@ -20,6 +20,7 @@
 #include <QString>
 #include <QStringList>
 
+class ClimateDataSource;
 class IrrigationDataSource;
 class QHttpServerResponse;
 class QTcpServer;
@@ -99,6 +100,13 @@ public:
     /** @brief Destructor. Joins the worker thread. */
     virtual ~IrrigationControlServer() override;
 
+    /**
+     * @brief Sets the climate database GET /admin/climate reads. Call before start().
+     *
+     * Left empty, the route answers 404: no sensor is configured.
+     */
+    void setClimateDatabasePath(const QString& value) { _climateDatabasePath = value; }
+
     /** @brief Sets the address the listener binds to. Call before start(). */
     void setBindAddress(const QString& value) { _bindAddress = value; }
 
@@ -168,6 +176,7 @@ private:
     QHttpServerResponse handleStop(const QHttpServerRequest& request);
     QHttpServerResponse handleSettingsGet(const QHttpServerRequest& request);
     QHttpServerResponse handleSettingsPut(const QHttpServerRequest& request);
+    QHttpServerResponse handleClimateGet(const QHttpServerRequest& request);
     QHttpServerResponse decisionResponse(const RunRequestPtr& decision);
 
     static QJsonObject zoneToJson(const Zone& zone);
@@ -198,11 +207,19 @@ private:
     static const QStringList SettingsKeys;
     static const TimeSpan DefaultDecisionTimeout;
 
+    /** @brief The most hours GET /admin/climate accepts, one leap year. */
+    static constexpr int MaximumClimateHours = 8784;
+
+    /** @brief The most buckets one GET /admin/climate response carries. */
+    static constexpr int MaximumClimateBuckets = 400;
+
     QString _databasePath;
     QString _bindAddress;
     int _listenPort;
     TimeSpan _decisionTimeout;
+    QString _climateDatabasePath;
     IrrigationDataSource* _source = nullptr;
+    ClimateDataSource* _climateSource = nullptr;
     QHttpServer* _httpServer = nullptr;
     QTcpServer* _tcpServer = nullptr;
     int _boundPort = 0;

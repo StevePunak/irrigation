@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useStatus } from './hooks/useStatus'
+import ClimateScreen from './screens/ClimateScreen'
 import NowScreen from './screens/NowScreen'
 import ProgramsScreen from './screens/ProgramsScreen'
 import SettingsScreen from './screens/SettingsScreen'
 
-export type ScreenName = 'now' | 'programs' | 'settings'
+export type ScreenName = 'now' | 'climate' | 'programs' | 'settings'
 
 const TABS: { name: ScreenName; label: string }[] = [
   { name: 'now', label: 'Now' },
+  { name: 'climate', label: 'Climate' },
   { name: 'programs', label: 'Programs' },
   { name: 'settings', label: 'Settings' },
 ]
@@ -51,6 +53,7 @@ export default function App() {
       ) : null}
 
       {screen === 'now' ? <NowScreen {...props} /> : null}
+      {screen === 'climate' ? <ClimateScreen {...props} /> : null}
       {screen === 'programs' ? <ProgramsScreen {...props} /> : null}
       {screen === 'settings' ? <SettingsScreen {...props} /> : null}
 

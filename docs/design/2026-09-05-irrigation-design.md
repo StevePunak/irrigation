@@ -573,6 +573,7 @@ POST   /admin/programs/{id}/run
 POST   /admin/stop
 GET    /admin/settings
 PUT    /admin/settings
+GET    /admin/climate?hours=N
 ```
 
 Run requests are decided on the thread that owns the valves and the reply waits
@@ -583,6 +584,13 @@ for the decision, bounded at five seconds: 202 when accepted, 409 with a
 `POST /admin/zones/{number}/stop` closes that zone and also aborts the running
 program and empties the queue, recording `dropped_stop`; other manual and panel
 zones stay open.
+
+`/admin/climate` returns the last `hours` (1–8784, default 24) of climate
+readings grouped into epoch-aligned buckets of a standard width chosen to keep
+the response at 400 buckets or fewer: `fromUtc`, `toUtc`, `bucketSeconds` and
+`buckets` (start, reading count, and min/mean/max of temperature °C and
+humidity %). Empty buckets are omitted. 404 when no sensor is configured, 400
+for an out-of-range `hours`.
 
 Program bodies carry `steps: [{ zones: [zoneId…], durationSeconds }]`;
 responses add each step's stored `id`.
@@ -598,7 +606,7 @@ and the controller's timezone identifier alongside its UTC timestamps.
 
 React 19 + Vite + TypeScript in `web/`, built to `web/dist/`.
 
-Three screens:
+Four screens:
 
 - **Now** — a Running card, shown only while something is running or queued
   or the status is unknown: one row per open zone with its countdown, a
@@ -611,6 +619,11 @@ Three screens:
   button. A refused run shows the daemon's reason.
   Mobile-first with large touch targets and high contrast for outdoor
   readability.
+- **Climate** — 24 h / 7 days / 30 days / 1 year. A temperature chart (°F)
+  above a humidity chart, sharing one time axis read in the controller's zone:
+  each a mean line over a min–max band, broken where readings are missing.
+  A readout above them shows the latest bucket, or the one under the pointer
+  or keyboard cursor; a table view lists every bucket. Refreshes each minute.
 - **Programs** — list, create, edit. Day rule, start times, ordered steps of
   zone chips with one duration each, a "runs in waves" warning on a step with
   more zones than the cap, computed total runtime assuming waves, next run.

@@ -185,3 +185,60 @@ export function inputValueToMinutes(value: string): number {
   }
   return hours * 60 + minutes
 }
+
+const HOUR_MS = 3600000
+
+function tickMatches(parts: ZonedParts, hours: number): boolean {
+  if (hours <= 24) {
+    return parts.hour % 6 === 0
+  }
+  if (parts.hour !== 0) {
+    return false
+  }
+  if (hours <= 168) {
+    return true
+  }
+  if (hours <= 744) {
+    return (parts.day - 1) % 7 === 0
+  }
+  return parts.day === 1
+}
+
+/**
+ * Returns the instants in [fromMs, toMs] where a chart axis spanning `hours` puts a tick,
+ * read in `zone`: every six hours for a day, local midnights for a week, every seventh
+ * day of the month for a month, and the first of each month beyond that.
+ */
+export function axisTicks(fromMs: number, toMs: number, zone: string, hours: number): number[] {
+  const ticks: number[] = []
+  for (let ms = Math.ceil(fromMs / HOUR_MS) * HOUR_MS; ms <= toMs; ms += HOUR_MS) {
+    const parts = zonedParts(new Date(ms).toISOString(), zone)
+    if (parts === null) {
+      return []
+    }
+    if (tickMatches(parts, hours)) {
+      ticks.push(ms)
+    }
+  }
+  return ticks
+}
+
+/** Labels an axisTicks() instant for an axis spanning `hours`, e.g. "6 PM", "Sat 10", "8 Oct", "Oct". */
+export function formatAxisTick(ms: number, zone: string, hours: number): string {
+  const parts = zonedParts(new Date(ms).toISOString(), zone)
+  if (parts === null) {
+    return INVALID_ZONE_MARKER
+  }
+  if (hours <= 24) {
+    const period = parts.hour < 12 ? 'AM' : 'PM'
+    const hour12 = parts.hour % 12 === 0 ? 12 : parts.hour % 12
+    return `${hour12} ${period}`
+  }
+  if (hours <= 168) {
+    return `${WEEKDAYS[parts.weekday]} ${parts.day}`
+  }
+  if (hours <= 744) {
+    return `${parts.day} ${MONTHS[parts.month - 1]}`
+  }
+  return parts.month === 1 ? `${MONTHS[0]} ${parts.year}` : MONTHS[parts.month - 1]!
+}

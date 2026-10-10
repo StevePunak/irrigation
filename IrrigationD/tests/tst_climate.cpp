@@ -207,6 +207,69 @@ private slots:
         QCOMPARE(store.readingsBetween(START.addSecs(5), START.addSecs(6)).count(), 1);
     }
 
+    void bucketsGroupByEpochAlignedWidthWithMinMeanAndMax()
+    {
+        QTemporaryDir dir;
+        ClimateDataSource store(dir.filePath("climate.db"));
+        QVERIFY(store.open());
+        ClimateReadingList readings;
+        const QList<QList<double>> rows = { { 0, 20, 50 }, { 100, 24, 60 }, { 300, 30, 70 }, { 900, 10, 40 } };
+        for(const QList<double>& row : rows) {
+            ClimateReading reading;
+            reading.atUtc = START.addSecs(static_cast<qint64>(row.at(0)));
+            reading.temperatureCelsius = row.at(1);
+            reading.humidityPercent = row.at(2);
+            readings.append(reading);
+        }
+        QVERIFY(store.insertReadings(readings));
+
+        const ClimateBucketList buckets = store.bucketsBetween(START, START.addSecs(1200), 300);
+        QCOMPARE(buckets.count(), 3);
+
+        QCOMPARE(buckets.at(0).startUtc, START);
+        QCOMPARE(buckets.at(0).count, 2);
+        QCOMPARE(buckets.at(0).temperatureMin, 20.0);
+        QCOMPARE(buckets.at(0).temperatureMean, 22.0);
+        QCOMPARE(buckets.at(0).temperatureMax, 24.0);
+        QCOMPARE(buckets.at(0).humidityMin, 50.0);
+        QCOMPARE(buckets.at(0).humidityMean, 55.0);
+        QCOMPARE(buckets.at(0).humidityMax, 60.0);
+
+        QCOMPARE(buckets.at(1).startUtc, START.addSecs(300));
+        QCOMPARE(buckets.at(1).count, 1);
+        QCOMPARE(buckets.at(1).temperatureMean, 30.0);
+
+        QCOMPARE(buckets.at(2).startUtc, START.addSecs(900));
+        QCOMPARE(buckets.at(2).humidityMax, 40.0);
+    }
+
+    void bucketsHonourTheHalfOpenRange()
+    {
+        QTemporaryDir dir;
+        ClimateDataSource store(dir.filePath("climate.db"));
+        QVERIFY(store.open());
+        ClimateReading first;
+        first.atUtc = START;
+        ClimateReading second;
+        second.atUtc = START.addSecs(60);
+        QVERIFY(store.insertReadings({ first, second }));
+
+        const ClimateBucketList buckets = store.bucketsBetween(START, START.addSecs(60), 60);
+        QCOMPARE(buckets.count(), 1);
+        QCOMPARE(buckets.at(0).startUtc, START);
+        QVERIFY(store.bucketsBetween(START, START.addSecs(60), 0).isEmpty());
+    }
+
+    void bucketSecondsForPicksTheNarrowestStandardWidthThatFits()
+    {
+        QCOMPARE(ClimateDataSource::bucketSecondsFor(3600, 400), 60);
+        QCOMPARE(ClimateDataSource::bucketSecondsFor(86400, 400), 300);
+        QCOMPARE(ClimateDataSource::bucketSecondsFor(7 * 86400, 400), 1800);
+        QCOMPARE(ClimateDataSource::bucketSecondsFor(30 * 86400, 400), 7200);
+        QCOMPARE(ClimateDataSource::bucketSecondsFor(365 * 86400, 400), 86400);
+        QCOMPARE(ClimateDataSource::bucketSecondsFor(Q_INT64_C(100) * 365 * 86400, 400), 604800);
+    }
+
     void storeAcceptsAnEmptyBatch()
     {
         QTemporaryDir dir;

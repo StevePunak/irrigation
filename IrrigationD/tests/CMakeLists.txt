@@ -134,6 +134,8 @@ irrigation_add_test(tst_controlserver
     ../src/irrigationcontrolserver.cpp
     ../src/json/statusjson.cpp
     ../src/json/programjson.cpp
+    ../src/json/climatejson.cpp
+    ../src/database/climatedatasource.cpp
     ../src/scheduler.cpp
     ../src/runrequest.cpp
     ../src/database/irrigationdatasource.cpp

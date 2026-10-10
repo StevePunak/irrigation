@@ -1,6 +1,8 @@
 #include "irrigationcontrolserver.h"
 
+#include "database/climatedatasource.h"
 #include "database/irrigationdatasource.h"
+#include "json/climatejson.h"
 #include "json/programjson.h"
 #include "json/statusjson.h"
 #include "panelcontroller.h"
@@ -22,6 +24,7 @@
 #include <QJsonValue>
 #include <QTcpServer>
 #include <QTimeZone>
+#include <QUrlQuery>
 #include <QUuid>
 
 const QStringList IrrigationControlServer::SettingsKeys = {
@@ -81,6 +84,18 @@ void IrrigationControlServer::threadStarted()
         logText(LVL_ERROR, QString("Control server could not open the database: %1")
                                .arg(_source->errorText()));
         return;
+    }
+
+    if(_climateDatabasePath.isEmpty() == false) {
+        _climateSource = new ClimateDataSource(_climateDatabasePath);
+        _climateSource->setConnectionName(QString("climate-http-%1")
+                                              .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        if(_climateSource->open() == false) {
+            logText(LVL_ERROR, QString("Control server could not open the climate database: %1")
+                                   .arg(_climateSource->errorText()));
+            delete _climateSource;
+            _climateSource = nullptr;
+        }
     }
 
     _httpServer = new QHttpServer;
@@ -175,6 +190,12 @@ void IrrigationControlServer::threadStarted()
         return this->handleSettingsPut(request);
     });
 
+    _httpServer->route("/admin/climate", QHttpServerRequest::Method::Get,
+                       [this](const QHttpServerRequest& request)
+    {
+        return this->handleClimateGet(request);
+    });
+
     _tcpServer = new QTcpServer;
     if(_tcpServer->listen(QHostAddress(_bindAddress), _listenPort) == false) {
         logText(LVL_ERROR, QString("Failed to listen on %1:%2 - %3")
@@ -211,6 +232,9 @@ void IrrigationControlServer::threadAboutToFinish()
 
     delete _source;
     _source = nullptr;
+
+    delete _climateSource;
+    _climateSource = nullptr;
 }
 
 QHttpServerResponse IrrigationControlServer::handleHealth(const QHttpServerRequest& request)
@@ -770,3 +794,34 @@ QHttpServerResponse IrrigationControlServer::decisionResponse(const RunRequestPt
 }
 
 #include "moc_irrigationcontrolserver.cpp"
+
+QHttpServerResponse IrrigationControlServer::handleClimateGet(const QHttpServerRequest& request)
+{
+    if(_climateDatabasePath.isEmpty()) {
+        return QHttpServerResponse(QJsonObject{{"error", "no climate sensor is configured"}},
+                                   QHttpServerResponder::StatusCode::NotFound);
+    }
+    if(_climateSource == nullptr) {
+        return QHttpServerResponse(QJsonObject{{"error", "the climate database is not open"}},
+                                   QHttpServerResponder::StatusCode::ServiceUnavailable);
+    }
+
+    int hours = 24;
+    const QUrlQuery query = request.query();
+    if(query.hasQueryItem("hours")) {
+        bool ok = false;
+        hours = query.queryItemValue("hours").toInt(&ok);
+        if(ok == false || hours < 1 || hours > MaximumClimateHours) {
+            return QHttpServerResponse(QJsonObject{{"error", QString("hours must be a whole number from 1 to %1").arg(MaximumClimateHours)}},
+                                       QHttpServerResponder::StatusCode::BadRequest);
+        }
+    }
+
+    const qint64 spanSeconds = static_cast<qint64>(hours) * 3600;
+    const QDateTime toUtc = QDateTime::currentDateTimeUtc().addSecs(1);
+    const QDateTime fromUtc = toUtc.addSecs(-spanSeconds);
+    const int bucketSeconds = ClimateDataSource::bucketSecondsFor(spanSeconds, MaximumClimateBuckets);
+    const ClimateBucketList buckets = _climateSource->bucketsBetween(fromUtc, toUtc, bucketSeconds);
+    return QHttpServerResponse(ClimateJson::toJson(buckets, bucketSeconds, fromUtc, toUtc),
+                               QHttpServerResponder::StatusCode::Ok);
+}

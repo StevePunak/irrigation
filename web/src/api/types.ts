@@ -32,6 +32,28 @@ export interface Climate {
   humidityPercent: number | null
 }
 
+export interface ClimateRange {
+  min: number
+  mean: number
+  max: number
+}
+
+/** The readings in one bucket of a climate history, reduced to their extremes and mean. */
+export interface ClimateBucket {
+  startUtc: string
+  count: number
+  temperatureC: ClimateRange
+  humidityPercent: ClimateRange
+}
+
+export interface ClimateHistory {
+  fromUtc: string
+  toUtc: string
+  bucketSeconds: number
+  /** Oldest first. A bucket with no readings is absent. */
+  buckets: ClimateBucket[]
+}
+
 export interface Status {
   running: RunningZone[]
   program: RunningProgram | null

@@ -23,6 +23,7 @@
 
 #include <Kanoop/timespan.h>
 
+#include "database/climatedatasource.h"
 #include "database/irrigationdatasource.h"
 #include "irrigationcontrolserver.h"
 #include "json/statusjson.h"
@@ -464,6 +465,11 @@ private slots:
     void climateCarriesAFreshReading();
     void climateNullsBothValuesWithoutAFreshReading();
     void sourceToJsonNamesAllThreeSources();
+
+    void climateGetIs404WithoutASensor();
+    void climateGetRejectsHoursOutOfRange_data();
+    void climateGetRejectsHoursOutOfRange();
+    void climateGetBucketsTheRequestedHours();
 
     void zonesGetListsAllEightSeededZones();
     void zonePutUpdatesTheZoneWhoseNumberMatches();
@@ -4100,6 +4106,88 @@ void TestControlServer::programPostRoundTripsAMultiZoneStepInOrder()
     QCOMPARE(gotSteps.at(1).toObject().value("durationSeconds").toInt(), 600);
 
     QVERIFY(server.stop(TimeSpan::fromSeconds(5)));
+}
+
+void TestControlServer::climateGetIs404WithoutASensor()
+{
+    QTemporaryDir dir;
+    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/climate");
+    QCOMPARE(statusCode(reply), 404);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
+void TestControlServer::climateGetRejectsHoursOutOfRange_data()
+{
+    QTest::addColumn<QString>("hours");
+    QTest::newRow("zero") << "0";
+    QTest::newRow("past a leap year") << "8785";
+    QTest::newRow("not a number") << "day";
+    QTest::newRow("fractional") << "1.5";
+}
+
+void TestControlServer::climateGetRejectsHoursOutOfRange()
+{
+    QFETCH(QString, hours);
+    QTemporaryDir dir;
+    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    server.setClimateDatabasePath(dir.filePath("climate.db"));
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/climate?hours=" + hours);
+    QCOMPARE(statusCode(reply), 400);
+
+    server.stop(TimeSpan::fromSeconds(5));
+}
+
+void TestControlServer::climateGetBucketsTheRequestedHours()
+{
+    QTemporaryDir dir;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    {
+        ClimateDataSource store(dir.filePath("climate.db"));
+        store.setConnectionName("climate-test-writer");
+        QVERIFY(store.open());
+        ClimateReadingList readings;
+        for(qint64 ago : { qint64(7200), qint64(200), qint64(10) }) {
+            ClimateReading reading;
+            reading.atUtc = now.addSecs(-ago);
+            reading.temperatureCelsius = 20.0;
+            reading.humidityPercent = 60.0;
+            readings.append(reading);
+        }
+        QVERIFY(store.insertReadings(readings));
+    }
+
+    IrrigationControlServer server(dir.filePath("irrigation.db"));
+    server.setClimateDatabasePath(dir.filePath("climate.db"));
+    QVERIFY(startServerOnLoopback(server));
+
+    QNetworkAccessManager manager;
+    QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/climate?hours=1");
+    QCOMPARE(statusCode(reply), 200);
+
+    const QJsonObject body = QJsonDocument::fromJson(reply->readAll()).object();
+    QCOMPARE(body.value("bucketSeconds").toInt(), 60);
+    QVERIFY(body.value("fromUtc").isString());
+    QVERIFY(body.value("toUtc").isString());
+
+    const QJsonArray buckets = body.value("buckets").toArray();
+    QCOMPARE(buckets.count(), 2);
+    const QJsonObject latest = buckets.last().toObject();
+    QStringList keys = latest.keys();
+    keys.sort();
+    QCOMPARE(keys, QStringList({ "count", "humidityPercent", "startUtc", "temperatureC" }));
+    QCOMPARE(latest.value("count").toInt(), 1);
+    QCOMPARE(latest.value("temperatureC").toObject().value("mean").toDouble(), 20.0);
+    QCOMPARE(latest.value("humidityPercent").toObject().value("max").toDouble(), 60.0);
+
+    server.stop(TimeSpan::fromSeconds(5));
 }
 
 QTEST_MAIN(TestControlServer)

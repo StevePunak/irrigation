@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   INVALID_ZONE_MARKER,
+  axisTicks,
+  formatAxisTick,
   formatClock,
   formatCountdown,
   formatDayAndClock,
@@ -131,5 +133,54 @@ describe('wall-clock minutes', () => {
     expect(minutesToClock(NaN)).toBe(INVALID_ZONE_MARKER)
     expect(minutesToInputValue(-1)).toBe('00:00')
     expect(minutesToInputValue(NaN)).toBe('00:00')
+  })
+})
+
+describe('axisTicks', () => {
+  const at = (iso: string) => Date.parse(iso)
+
+  it('ticks a day every six local hours', () => {
+    // 2026-10-10 07:00Z is midnight in Los Angeles (PDT).
+    const ticks = axisTicks(at('2026-10-10T06:30:00Z'), at('2026-10-11T06:30:00Z'), LA, 24)
+    expect(ticks.map((ms) => formatAxisTick(ms, LA, 24))).toEqual(['12 AM', '6 AM', '12 PM', '6 PM'])
+    expect(new Date(ticks[0]!).toISOString()).toBe('2026-10-10T07:00:00.000Z')
+  })
+
+  it('ticks a week at each local midnight', () => {
+    const ticks = axisTicks(at('2026-10-03T18:00:00Z'), at('2026-10-10T18:00:00Z'), LA, 168)
+    expect(ticks.map((ms) => formatAxisTick(ms, LA, 168))).toEqual([
+      'Sun 4',
+      'Mon 5',
+      'Tue 6',
+      'Wed 7',
+      'Thu 8',
+      'Fri 9',
+      'Sat 10',
+    ])
+  })
+
+  it('keeps local midnight across the fall-back day', () => {
+    // 2026-11-01 is when America/Los_Angeles falls back; midnight moves from 07:00Z to 08:00Z.
+    const ticks = axisTicks(at('2026-10-31T12:00:00Z'), at('2026-11-03T12:00:00Z'), LA, 168)
+    expect(ticks.map((ms) => new Date(ms).toISOString())).toEqual([
+      '2026-11-01T07:00:00.000Z',
+      '2026-11-02T08:00:00.000Z',
+      '2026-11-03T08:00:00.000Z',
+    ])
+  })
+
+  it('ticks a month on the 1st, 8th, 15th, 22nd and 29th', () => {
+    const ticks = axisTicks(at('2026-09-10T00:00:00Z'), at('2026-10-10T00:00:00Z'), 'UTC', 720)
+    expect(ticks.map((ms) => formatAxisTick(ms, 'UTC', 720))).toEqual(['15 Sep', '22 Sep', '29 Sep', '1 Oct', '8 Oct'])
+  })
+
+  it('ticks a year on the first of each month and names the year at January', () => {
+    const ticks = axisTicks(at('2026-10-10T00:00:00Z'), at('2027-03-10T00:00:00Z'), 'UTC', 8760)
+    expect(ticks.map((ms) => formatAxisTick(ms, 'UTC', 8760))).toEqual(['Nov', 'Dec', 'Jan 2027', 'Feb', 'Mar'])
+  })
+
+  it('gives no ticks for a zone the runtime does not know', () => {
+    expect(axisTicks(at('2026-10-10T00:00:00Z'), at('2026-10-11T00:00:00Z'), 'Not/AZone', 24)).toEqual([])
+    expect(formatAxisTick(at('2026-10-10T00:00:00Z'), 'Not/AZone', 24)).toBe(INVALID_ZONE_MARKER)
   })
 })
