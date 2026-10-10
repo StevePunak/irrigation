@@ -424,8 +424,9 @@ void IrrigationDaemon::onZoneStopRequested(int zoneNumber)
     }
 
     logText(LVL_INFO, QString("Stop requested for zone %1").arg(zoneNumber));
-    if(_zoneController->closeZone(zoneNumber) == false) {
-        logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(_zoneController->errorText()));
+    QString errorText;
+    if(_panelHost->stopZone(zoneNumber, &errorText) == false) {
+        logText(LVL_ERROR, QString("Failed to close zone %1: %2").arg(zoneNumber).arg(errorText));
     }
 
     publishStatus();

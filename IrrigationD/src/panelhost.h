@@ -49,6 +49,13 @@ public:
      */
     bool clearController(QString* errorText = nullptr);
 
+    /**
+     * @brief Closes @p zoneNumber as an app Stop does: the queue empties recording dropped_stop, the program aborts, and the zone closes. Other manual and panel zones stay open.
+     * @param errorText When given and the close fails, set to the failure text.
+     * @return True on success.
+     */
+    bool stopZone(int zoneNumber, QString* errorText = nullptr);
+
     /** @brief Reads the open zones, the enabled zones, the run time, STOP, the fault latch and the master enable. */
     virtual PanelSnapshot panelSnapshot() override;
 
@@ -62,6 +69,7 @@ public:
     virtual void takeOverForPanel() override;
 
 private:
+    void cancelPrograms();
     QList<int> enabledZoneNumbers();
 
     ZoneController* _controller = nullptr;

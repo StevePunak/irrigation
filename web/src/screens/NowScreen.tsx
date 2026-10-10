@@ -41,7 +41,10 @@ interface RunningRowProps {
   onStop: (zoneNumber: number) => void
 }
 
-/** The row's Stop carries no disabled state: whoever is standing in the spray must be able to close this valve whatever else is in flight. */
+/**
+ * The row's Stop carries no disabled state: whoever is standing in the spray must be able to close this valve whatever else is in flight.
+ * The daemon's zone stop also aborts any running program and empties the queue.
+ */
 function RunningRow({ entry, name, polls, onStop }: RunningRowProps) {
   const remaining = useCountdown(entry.secondsRemaining, polls)
   return (
@@ -139,9 +142,10 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
   const atCap = status !== null && running.length >= cap
   const nameOf = (zoneNumber: number) => zones.find((zone) => zone.number === zoneNumber)?.name ?? ''
   const zoneId = status?.timezone ?? ''
-  // An unknown status keeps STOP on screen: a failing poll can hide a valve that is open.
-  const stoppable =
+  const active =
     status === null || running.length > 0 || status.program !== null || status.queue.length > 0
+  // Stop all stands in for the row Stops whenever there is no row to tap, above all when a failing poll hides an open valve.
+  const showStopAll = active && running.length === 0
 
   return (
     <section className="screen">
@@ -164,37 +168,35 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
         </div>
       )}
 
-      <div className="running" data-testid="running-banner">
-        {status === null ? (
-          <span className="running__unknown">Zone state unknown</span>
-        ) : running.length === 0 ? (
-          <span className="running__idle">No zone running</span>
-        ) : (
-          <ul className="running-list">
-            {running.map((entry) => (
-              <RunningRow
-                key={entry.zone}
-                entry={entry}
-                name={nameOf(entry.zone)}
-                polls={polls}
-                onStop={onStopZone}
-              />
-            ))}
-          </ul>
-        )}
-        {status !== null && status.program !== null ? (
-          <div className="program-line" data-testid="program-line">
-            {programLine(status.program)}
-          </div>
-        ) : null}
-        {status !== null && status.queue.length > 0 ? (
-          <div className="queue-line" data-testid="queue-line">
-            Queued: {status.queue.map((entry) => entry.name).join(', ')}
-          </div>
-        ) : null}
-      </div>
-
-      {stoppable ? <StopButton onStop={onStop} busy={busy} /> : null}
+      {active ? (
+        <div className="running" data-testid="running-banner">
+          {status === null ? <span className="running__unknown">Zone state unknown</span> : null}
+          {running.length > 0 ? (
+            <ul className="running-list">
+              {running.map((entry) => (
+                <RunningRow
+                  key={entry.zone}
+                  entry={entry}
+                  name={nameOf(entry.zone)}
+                  polls={polls}
+                  onStop={onStopZone}
+                />
+              ))}
+            </ul>
+          ) : null}
+          {status !== null && status.program !== null ? (
+            <div className="program-line" data-testid="program-line">
+              {programLine(status.program)}
+            </div>
+          ) : null}
+          {status !== null && status.queue.length > 0 ? (
+            <div className="queue-line" data-testid="queue-line">
+              Queued: {status.queue.map((entry) => entry.name).join(', ')}
+            </div>
+          ) : null}
+          {showStopAll ? <StopButton onStop={onStop} busy={busy} /> : null}
+        </div>
+      ) : null}
 
       <div className="next-run" data-testid="next-run">
         Next run:{' '}
@@ -229,17 +231,14 @@ export default function NowScreen({ status, polls, refresh }: ScreenProps) {
 
       <div className="zone-grid">
         {zones.map((entry) => {
-          const source = running.find((item) => item.zone === entry.number)?.source
-          const open = source !== undefined
+          const open = running.some((item) => item.zone === entry.number)
           return (
             <ZoneTile
               key={entry.number}
               zone={entry}
               running={open}
-              panel={source === 'panel'}
-              disabled={busy || (atCap && open === false)}
+              disabled={busy || atCap}
               onRun={onRun}
-              onStop={onStopZone}
             />
           )
         })}

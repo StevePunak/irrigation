@@ -11,7 +11,7 @@ export interface StopButtonProps {
 export default function StopButton({ onStop, busy }: StopButtonProps) {
   return (
     <button type="button" className="stop" onClick={onStop} aria-busy={busy}>
-      STOP
+      Stop all
     </button>
   )
 }

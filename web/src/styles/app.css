@@ -177,6 +177,11 @@ option {
   list-style: none;
 }
 
+.running-list > li + li {
+  padding-top: var(--gap);
+  border-top: 1px solid var(--glass-edge);
+}
+
 .running-row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -299,10 +304,13 @@ option {
   color: var(--warn);
 }
 
-.zone-tile__tag {
-  align-self: flex-start;
-  border: 1px solid var(--accent);
-  color: var(--accent);
+.zone-tile__running {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--touch);
+  font-weight: 700;
+  color: var(--running);
 }
 
 .alert {

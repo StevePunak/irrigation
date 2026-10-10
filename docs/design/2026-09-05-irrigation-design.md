@@ -580,6 +580,10 @@ for the decision, bounded at five seconds: 202 when accepted, 409 with a
 `reason` of `cap_reached`, `stop_held`, `master_disabled`, `zone_disabled` or
 `already_queued`, 500 when the open failed, 503 when no decision arrived.
 
+`POST /admin/zones/{number}/stop` closes that zone and also aborts the running
+program and empties the queue, recording `dropped_stop`; other manual and panel
+zones stay open.
+
 Program bodies carry `steps: [{ zones: [zoneId…], durationSeconds }]`;
 responses add each step's stored `id`.
 
@@ -596,13 +600,15 @@ React 19 + Vite + TypeScript in `web/`, built to `web/dist/`.
 
 Three screens:
 
-- **Now** — one row per open zone with its countdown, a program/manual tag and
-  its own Stop; the running program's step and waiting zones; the queued
-  programs; the next scheduled run; eight zone tiles, each glowing while open
-  with its button reading Stop and closing that zone — always enabled, even
-  at the cap; a closed tile's button reads Run, for a quick manual open, and
-  is disabled on the others at the cap with an "N of N running" hint; a
-  refused run shows the daemon's reason; and a prominent stop control.
+- **Now** — a Running card, shown only while something is running or queued
+  or the status is unknown: one row per open zone with its countdown, a
+  program/manual/panel tag and its own Stop, always enabled; the running
+  program's step and waiting zones; the queued programs; and a Stop all only
+  when no row offers a Stop (status unknown, or a program with no zone open).
+  Below it, the next scheduled run and eight zone tiles: a closed tile's
+  button reads Run, for a quick manual open, and is disabled at the cap with
+  an "N of N running" hint; an open tile glows and reads Running with no
+  button. A refused run shows the daemon's reason.
   Mobile-first with large touch targets and high contrast for outdoor
   readability.
 - **Programs** — list, create, edit. Day rule, start times, ordered steps of

@@ -37,15 +37,35 @@ int PanelHost::runSeconds() const
 
 bool PanelHost::clearController(QString* errorText)
 {
-    // dropAll() precedes abort(): an aborted program starts the next queued one.
-    _queue->dropAll(FiredInstant::Outcome::DroppedStop);
-    _runner->abort();
+    cancelPrograms();
 
     const bool success = _controller->allOff();
     if(success == false && errorText != nullptr) {
         *errorText = _controller->errorText();
     }
     return success;
+}
+
+bool PanelHost::stopZone(int zoneNumber, QString* errorText)
+{
+    cancelPrograms();
+
+    if(_controller->isOpen(zoneNumber) == false) {
+        return true;
+    }
+
+    const bool success = _controller->closeZone(zoneNumber);
+    if(success == false && errorText != nullptr) {
+        *errorText = _controller->errorText();
+    }
+    return success;
+}
+
+void PanelHost::cancelPrograms()
+{
+    // dropAll() precedes abort(): an aborted program starts the next queued one.
+    _queue->dropAll(FiredInstant::Outcome::DroppedStop);
+    _runner->abort();
 }
 
 PanelSnapshot PanelHost::panelSnapshot()

@@ -146,6 +146,8 @@ private slots:
     void openPanelZoneWithAFreeSlotWhereTheOpenFailsLeavesTheReplacedZoneOpen();
     void closePanelZoneClosesOnlyThatZone();
     void takeOverClearsAProgramAppZonesAndTheQueue();
+    void stopZoneAbortsTheProgramAndQueueButKeepsOtherManualZones();
+    void stopZoneOnAClosedZoneStillAbortsTheProgram();
 };
 
 void TestPanelHost::theSnapshotListsOpenAndEnabledZonesAscending()
@@ -381,6 +383,49 @@ void TestPanelHost::takeOverClearsAProgramAppZonesAndTheQueue()
     QCOMPARE(panel.panelZone(), 1);
     QVERIFY(rig.runner.isRunning() == false);
     QVERIFY(rig.queue.entries().isEmpty());
+}
+
+void TestPanelHost::stopZoneAbortsTheProgramAndQueueButKeepsOtherManualZones()
+{
+    Rig rig;
+    QVERIFY(rig.begin());
+
+    const int running = rig.buildProgram("Running", { 1 }, 600);
+    const int waiting = rig.buildProgram("Waiting", { 2 }, 600);
+    QVERIFY(rig.insertQueuedFiring(running, 41, DueAt));
+    QVERIFY(rig.insertQueuedFiring(waiting, 42, DueAt));
+    rig.queue.enqueueScheduled(running, 41, DueAt);
+    rig.queue.enqueueScheduled(waiting, 42, DueAt);
+    QVERIFY(rig.controller.openZone(7, 300));
+    QCOMPARE(rig.controller.openZoneNumbers(), QList<int>({ 1, 7 }));
+
+    QVERIFY(rig.host.stopZone(7));
+
+    QVERIFY(rig.runner.isRunning() == false);
+    QVERIFY(rig.queue.entries().isEmpty());
+    QVERIFY(rig.controller.openZoneNumbers().isEmpty());
+    QCOMPARE(rig.outcomeFor(waiting, 42), QString("dropped_stop"));
+
+    QVERIFY(rig.controller.openZone(3, 300));
+    QVERIFY(rig.controller.openZone(5, 300));
+    QVERIFY(rig.host.stopZone(3));
+    QCOMPARE(rig.controller.openZoneNumbers(), QList<int>({ 5 }));
+}
+
+void TestPanelHost::stopZoneOnAClosedZoneStillAbortsTheProgram()
+{
+    Rig rig;
+    QVERIFY(rig.begin());
+
+    const int running = rig.buildProgram("Running", { 1 }, 600);
+    QVERIFY(rig.insertQueuedFiring(running, 51, DueAt));
+    rig.queue.enqueueScheduled(running, 51, DueAt);
+    QVERIFY(rig.runner.isRunning());
+
+    QVERIFY(rig.host.stopZone(4));
+
+    QVERIFY(rig.runner.isRunning() == false);
+    QVERIFY(rig.controller.openZoneNumbers().isEmpty());
 }
 
 QTEST_MAIN(TestPanelHost)
