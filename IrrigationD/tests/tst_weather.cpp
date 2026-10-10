@@ -102,6 +102,7 @@ private slots:
     void parseRejectsUnusableBodies_data();
     void parseRejectsUnusableBodies();
     void upsertReplacesARevisedHourAndStep();
+    void bucketWeatherPutsTotalsWithTheirHourAndInstantsWithTheirTime();
     void migratesAVersion100DatabaseAndKeepsItsReadings();
     void pollerStoresWhatTheServiceReturns();
     void pollerStoresNothingFromAnErrorResponse();
@@ -208,6 +209,41 @@ void TestWeather::upsertReplacesARevisedHourAndStep()
     QCOMPARE(query.value(0).toDouble(), 0.8);
     QCOMPARE(query.value(1).toDouble(), 33.46349);
     QCOMPARE(query.value(2).toLongLong(), NOW.addSecs(900).toSecsSinceEpoch());
+}
+
+void TestWeather::bucketWeatherPutsTotalsWithTheirHourAndInstantsWithTheirTime()
+{
+    const QDateTime noon(QDate(2026, 10, 10), QTime(12, 0), QTimeZone::UTC);
+    WeatherHourList hours;
+    for(int i = 1; i <= 4; i++) {
+        WeatherHour hour;
+        hour.hourEndUtc = noon.addSecs(i * 3600);
+        hour.precipitationMm = i * 1.0;
+        hour.et0Mm = 0.5;
+        hour.temperatureCelsius = 20.0 + i;
+        hour.humidityPercent = i == 2 ? std::optional<double>() : std::optional<double>(60.0);
+        hours.append(hour);
+    }
+
+    const WeatherBucketList hourly = ClimateDataSource::bucketWeather(hours, noon, noon.addSecs(3 * 3600), 3600);
+    QCOMPARE(hourly.count(), 3);
+    QCOMPARE(hourly.at(0).startUtc, noon);
+    QCOMPARE(hourly.at(0).precipitationMm.value(), 1.0);
+    QVERIFY(hourly.at(0).temperatureCelsius.has_value() == false);
+    QCOMPARE(hourly.at(1).precipitationMm.value(), 2.0);
+    QCOMPARE(hourly.at(1).temperatureCelsius.value(), 21.0);
+    QCOMPARE(hourly.at(2).temperatureCelsius.value(), 22.0);
+    QVERIFY(hourly.at(2).humidityPercent.has_value() == false);
+
+    const WeatherBucketList twoHourly = ClimateDataSource::bucketWeather(hours, noon, noon.addSecs(4 * 3600), 7200);
+    QCOMPARE(twoHourly.count(), 2);
+    QCOMPARE(twoHourly.at(0).precipitationMm.value(), 3.0);
+    QCOMPARE(twoHourly.at(0).et0Mm.value(), 1.0);
+    QCOMPARE(twoHourly.at(0).temperatureCelsius.value(), 21.0);
+    QCOMPARE(twoHourly.at(0).humidityPercent.value(), 60.0);
+    QCOMPARE(twoHourly.at(1).precipitationMm.value(), 7.0);
+    QCOMPARE(twoHourly.at(1).temperatureCelsius.value(), 22.5);
+    QCOMPARE(twoHourly.at(1).humidityPercent.value(), 60.0);
 }
 
 void TestWeather::migratesAVersion100DatabaseAndKeepsItsReadings()

@@ -623,8 +623,12 @@ zones stay open.
 readings grouped into epoch-aligned buckets of a standard width chosen to keep
 the response at 400 buckets or fewer: `fromUtc`, `toUtc`, `bucketSeconds` and
 `buckets` (start, reading count, and min/mean/max of temperature °C and
-humidity %). Empty buckets are omitted. 404 when no sensor is configured, 400
-for an out-of-range `hours`.
+humidity %). Empty buckets are omitted. A `weather` object carries the stored
+Open-Meteo weather over the same range in buckets at least an hour wide: per
+bucket, total rain and ET₀ (mm) over the hours inside it and mean temperature
+(°C) and humidity (%) over the hourly values taken inside it, each null when
+the bucket has none. 404 when no sensor is configured, 400 for an
+out-of-range `hours`.
 
 Program bodies carry `steps: [{ zones: [zoneId…], durationSeconds }]`;
 responses add each step's stored `id`.
@@ -656,8 +660,14 @@ Four screens:
 - **Climate** — 24 h / 7 days / 30 days / 1 year. A temperature chart (°F)
   above a humidity chart, sharing one time axis read in the controller's zone:
   each a mean line over a min–max band, broken where readings are missing.
-  A readout above them shows the latest bucket, or the one under the pointer
-  or keyboard cursor; a table view lists every bucket. Refreshes each minute.
+  Open-Meteo's temperature and humidity run through both as a dashed grey
+  reference with a legend; the sensor stays the primary line. Below them, a
+  rain and ET₀ chart in inches: rain as bars, ET₀ as a line, with the range's
+  totals in the legend. One crosshair time drives all three charts. A readout
+  above them shows the latest bucket, or the one under the pointer or keyboard
+  cursor, with Open-Meteo's values for the same time; with nothing hovered,
+  each Open-Meteo value is the newest one stored. Table views list every
+  sensor bucket and every weather bucket. Refreshes each minute.
 - **Programs** — list, create, edit. Day rule, start times, ordered steps of
   zone chips with one duration each, a "runs in waves" warning on a step with
   more zones than the cap, computed total runtime assuming waves, next run.

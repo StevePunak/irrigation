@@ -10,8 +10,13 @@
 class ClimateJson
 {
 public:
-    /** @brief Serializes @p buckets, @p bucketSeconds wide and covering [@p fromUtc, @p toUtc), into the GET /admin/climate response body. */
+    /**
+     * @brief Serializes @p buckets, @p bucketSeconds wide and covering [@p fromUtc, @p toUtc), and
+     *        @p weather, @p weatherBucketSeconds wide over the same range, into the GET /admin/climate
+     *        response body. A weather measure with no value is null.
+     */
     static QJsonObject toJson(const ClimateBucketList& buckets, int bucketSeconds,
+                              const WeatherBucketList& weather, int weatherBucketSeconds,
                               const QDateTime& fromUtc, const QDateTime& toUtc);
 };
 

@@ -3,6 +3,7 @@
 #include <Kanoop/database/sqlparser.h>
 
 #include <QDir>
+#include <QMap>
 #include <QFile>
 #include <QSqlQuery>
 #include <QTimeZone>
@@ -236,6 +237,89 @@ WeatherHourList ClimateDataSource::weatherHoursBetween(const QDateTime& fromUtc,
         hour.temperatureCelsius = optionalDouble(query.value(3));
         hour.humidityPercent = optionalDouble(query.value(4));
         result.append(hour);
+    }
+    return result;
+}
+
+WeatherBucketList ClimateDataSource::weatherBucketsBetween(const QDateTime& fromUtc, const QDateTime& toUtc,
+                                                         int bucketSeconds)
+{
+    return bucketWeather(weatherHoursBetween(fromUtc, toUtc.addSecs(3600)), fromUtc, toUtc, bucketSeconds);
+}
+
+WeatherBucketList ClimateDataSource::bucketWeather(const WeatherHourList& hours, const QDateTime& fromUtc,
+                                                   const QDateTime& toUtc, int bucketSeconds)
+{
+    struct Sums
+    {
+        double precipitation = 0;
+        int precipitationCount = 0;
+        double et0 = 0;
+        int et0Count = 0;
+        double temperature = 0;
+        int temperatureCount = 0;
+        double humidity = 0;
+        int humidityCount = 0;
+    };
+
+    WeatherBucketList result;
+    if(bucketSeconds <= 0) {
+        return result;
+    }
+
+    const qint64 from = fromUtc.toSecsSinceEpoch();
+    const qint64 to = toUtc.toSecsSinceEpoch();
+    const auto keyOf = [bucketSeconds](qint64 seconds) { return (seconds / bucketSeconds) * bucketSeconds; };
+
+    QMap<qint64, Sums> sums;
+    for(const WeatherHour& hour : hours) {
+        const qint64 end = hour.hourEndUtc.toSecsSinceEpoch();
+        const qint64 start = end - 3600;
+        if(start >= from && start < to) {
+            Sums& bucket = sums[keyOf(start)];
+            if(hour.precipitationMm.has_value()) {
+                bucket.precipitation += hour.precipitationMm.value();
+                bucket.precipitationCount++;
+            }
+            if(hour.et0Mm.has_value()) {
+                bucket.et0 += hour.et0Mm.value();
+                bucket.et0Count++;
+            }
+        }
+        if(end >= from && end < to) {
+            Sums& bucket = sums[keyOf(end)];
+            if(hour.temperatureCelsius.has_value()) {
+                bucket.temperature += hour.temperatureCelsius.value();
+                bucket.temperatureCount++;
+            }
+            if(hour.humidityPercent.has_value()) {
+                bucket.humidity += hour.humidityPercent.value();
+                bucket.humidityCount++;
+            }
+        }
+    }
+
+    for(auto it = sums.constBegin(); it != sums.constEnd(); ++it) {
+        const Sums& value = it.value();
+        if(value.precipitationCount == 0 && value.et0Count == 0
+           && value.temperatureCount == 0 && value.humidityCount == 0) {
+            continue;
+        }
+        WeatherBucket bucket;
+        bucket.startUtc = QDateTime::fromSecsSinceEpoch(it.key(), QTimeZone::UTC);
+        if(value.precipitationCount > 0) {
+            bucket.precipitationMm = value.precipitation;
+        }
+        if(value.et0Count > 0) {
+            bucket.et0Mm = value.et0;
+        }
+        if(value.temperatureCount > 0) {
+            bucket.temperatureCelsius = value.temperature / value.temperatureCount;
+        }
+        if(value.humidityCount > 0) {
+            bucket.humidityPercent = value.humidity / value.humidityCount;
+        }
+        result.append(bucket);
     }
     return result;
 }

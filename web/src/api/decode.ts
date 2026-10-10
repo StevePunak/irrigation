@@ -14,6 +14,8 @@ import {
   type RunningZone,
   type SettingsMap,
   type Status,
+  type WeatherBucket,
+  type WeatherHistory,
   type Zone,
 } from './types'
 
@@ -171,6 +173,31 @@ function decodeClimateBucket(element: unknown, field: string): ClimateBucket {
   }
 }
 
+function decodeWeatherBucket(element: unknown, field: string): WeatherBucket {
+  const source = asRecord(element, field)
+  return {
+    startUtc: str(source, 'startUtc', field),
+    precipitationMm: nullableNum(source, 'precipitationMm', field),
+    et0Mm: nullableNum(source, 'et0Mm', field),
+    temperatureC: nullableNum(source, 'temperatureC', field),
+    humidityPercent: nullableNum(source, 'humidityPercent', field),
+  }
+}
+
+/** A daemon older than the weather poller omits the key, which reads as no weather. */
+function decodeWeatherHistory(value: unknown, field: string): WeatherHistory {
+  if (value === undefined) {
+    return { bucketSeconds: 0, buckets: [] }
+  }
+  const source = asRecord(value, field)
+  return {
+    bucketSeconds: num(source, 'bucketSeconds', field),
+    buckets: asArray(source['buckets'], `${field}.buckets`).map((element, index) =>
+      decodeWeatherBucket(element, `${field}.buckets[${index}]`),
+    ),
+  }
+}
+
 export function decodeClimateHistory(payload: unknown): ClimateHistory {
   const source = asRecord(payload, 'climate')
   return {
@@ -180,6 +207,7 @@ export function decodeClimateHistory(payload: unknown): ClimateHistory {
     buckets: asArray(source['buckets'], 'climate.buckets').map((element, index) =>
       decodeClimateBucket(element, `climate.buckets[${index}]`),
     ),
+    weather: decodeWeatherHistory(source['weather'], 'climate.weather'),
   }
 }
 

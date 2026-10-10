@@ -46,12 +46,31 @@ export interface ClimateBucket {
   humidityPercent: ClimateRange
 }
 
+/**
+ * Open-Meteo's modelled weather over one bucket. Rain and ET₀ total the hours inside it;
+ * temperature and humidity average the hourly values taken inside it. Null when nothing fell in it.
+ */
+export interface WeatherBucket {
+  startUtc: string
+  precipitationMm: number | null
+  et0Mm: number | null
+  temperatureC: number | null
+  humidityPercent: number | null
+}
+
+export interface WeatherHistory {
+  bucketSeconds: number
+  /** Oldest first. A bucket with no weather is absent. */
+  buckets: WeatherBucket[]
+}
+
 export interface ClimateHistory {
   fromUtc: string
   toUtc: string
   bucketSeconds: number
   /** Oldest first. A bucket with no readings is absent. */
   buckets: ClimateBucket[]
+  weather: WeatherHistory
 }
 
 export interface Status {

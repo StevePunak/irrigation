@@ -835,6 +835,8 @@ QHttpServerResponse IrrigationControlServer::handleClimateGet(const QHttpServerR
     const QDateTime fromUtc = toUtc.addSecs(-spanSeconds);
     const int bucketSeconds = ClimateDataSource::bucketSecondsFor(spanSeconds, MaximumClimateBuckets);
     const ClimateBucketList buckets = _climateSource->bucketsBetween(fromUtc, toUtc, bucketSeconds);
-    return QHttpServerResponse(ClimateJson::toJson(buckets, bucketSeconds, fromUtc, toUtc),
+    const int weatherBucketSeconds = qMax(bucketSeconds, 3600);
+    const WeatherBucketList weather = _climateSource->weatherBucketsBetween(fromUtc, toUtc, weatherBucketSeconds);
+    return QHttpServerResponse(ClimateJson::toJson(buckets, bucketSeconds, weather, weatherBucketSeconds, fromUtc, toUtc),
                                QHttpServerResponder::StatusCode::Ok);
 }

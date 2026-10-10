@@ -13,6 +13,14 @@ export interface AxisTick {
   label: string
 }
 
+/** A second series drawn dashed for comparison; each point's `mean` sits at `ms` exactly. */
+export interface ReferenceSeries {
+  label: string
+  points: ChartPoint[]
+  /** Points further apart than 1.5 times this break the line. */
+  spacingMs: number
+}
+
 export interface ClimateChartProps {
   title: string
   unit: string
@@ -28,6 +36,9 @@ export interface ClimateChartProps {
   ceiling?: number
   /** A CSS color for the band and line. */
   color: string
+  /** Names the main series in the legend shown beside a reference. */
+  seriesLabel?: string
+  reference?: ReferenceSeries | undefined
   hover: number | null
   onHover: (index: number | null) => void
 }
@@ -36,7 +47,7 @@ const HEIGHT = 170
 const FALLBACK_WIDTH = 640
 const MARGIN = { top: 10, right: 12, bottom: 24, left: 40 }
 
-function useWidth(): [RefObject<HTMLDivElement | null>, number] {
+export function useWidth(): [RefObject<HTMLDivElement | null>, number] {
   const ref = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(FALLBACK_WIDTH)
   useEffect(() => {
@@ -97,14 +108,15 @@ export function nearestIndex(points: ChartPoint[], bucketMs: number, ms: number)
 }
 
 export default function ClimateChart(props: ClimateChartProps) {
-  const { title, unit, points, fromMs, toMs, bucketMs, ticks, step, color, hover, onHover } = props
+  const { title, unit, points, fromMs, toMs, bucketMs, ticks, step, color, hover, onHover, reference } = props
   const [wrapper, width] = useWidth()
 
   const plotWidth = Math.max(width - MARGIN.left - MARGIN.right, 10)
   const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom
 
-  const lowest = Math.min(...points.map((point) => point.min))
-  const highest = Math.max(...points.map((point) => point.max))
+  const referenceMeans = reference?.points.map((point) => point.mean) ?? []
+  const lowest = Math.min(...points.map((point) => point.min), ...referenceMeans)
+  const highest = Math.max(...points.map((point) => point.max), ...referenceMeans)
   let yLow = Math.floor(lowest / step) * step
   let yHigh = Math.ceil(highest / step) * step
   if (props.floor !== undefined) {
@@ -136,6 +148,13 @@ export default function ClimateChart(props: ClimateChartProps) {
     (run) => `M${run.map((point) => `${x(centre(point)).toFixed(1)},${y(point.mean).toFixed(1)}`).join('L')}`,
   )
   const lone = runs.filter((run) => run.length === 1).map((run) => run[0]!)
+  const clamp = (ms: number) => Math.min(Math.max(ms, fromMs), toMs)
+  const referenceLines =
+    reference === undefined
+      ? []
+      : runsOf(reference.points, reference.spacingMs).map(
+          (run) => `M${run.map((point) => `${x(clamp(point.ms)).toFixed(1)},${y(point.mean).toFixed(1)}`).join('L')}`,
+        )
 
   const selected = hover === null ? undefined : points[hover]
 
@@ -174,6 +193,18 @@ export default function ClimateChart(props: ClimateChartProps) {
     <figure className="climate-chart">
       <figcaption className="climate-chart__title">
         {title} <span className="climate-chart__unit">{unit}</span>
+        {reference === undefined ? null : (
+          <span className="climate-legend">
+            <span className="climate-legend__item">
+              <span className="climate-legend__line" style={{ borderTopColor: color }} aria-hidden="true" />
+              {props.seriesLabel ?? title}
+            </span>
+            <span className="climate-legend__item">
+              <span className="climate-legend__line climate-legend__line--reference" aria-hidden="true" />
+              {reference.label}
+            </span>
+          </span>
+        )}
       </figcaption>
       <div ref={wrapper} className="climate-chart__plot">
         <svg
@@ -226,6 +257,9 @@ export default function ClimateChart(props: ClimateChartProps) {
               strokeLinejoin="round"
               strokeLinecap="round"
             />
+          ))}
+          {referenceLines.map((path, index) => (
+            <path key={`reference-${index}`} d={path} className="climate-chart__reference" />
           ))}
           {lone.map((point) => (
             <circle key={`lone-${point.ms}`} cx={x(centre(point))} cy={y(point.mean)} r={2} fill={color} />

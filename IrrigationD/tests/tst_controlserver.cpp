@@ -4176,6 +4176,15 @@ void TestControlServer::climateGetBucketsTheRequestedHours()
             readings.append(reading);
         }
         QVERIFY(store.insertReadings(readings));
+
+        WeatherReport report;
+        report.fetchedAtUtc = now;
+        WeatherHour hour;
+        hour.hourEndUtc = QDateTime::fromSecsSinceEpoch((now.toSecsSinceEpoch() / 3600) * 3600, QTimeZone::UTC);
+        hour.precipitationMm = 1.5;
+        hour.temperatureCelsius = 21.0;
+        report.hours.append(hour);
+        QVERIFY(store.upsertWeather(report));
     }
 
     IrrigationControlServer server(dir.filePath("irrigation.db"));
@@ -4183,7 +4192,7 @@ void TestControlServer::climateGetBucketsTheRequestedHours()
     QVERIFY(startServerOnLoopback(server));
 
     QNetworkAccessManager manager;
-    QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/climate?hours=1");
+    QNetworkReply* reply = getJson(manager, server.boundPort(), "/admin/climate?hours=3");
     QCOMPARE(statusCode(reply), 200);
 
     const QJsonObject body = QJsonDocument::fromJson(reply->readAll()).object();
@@ -4192,7 +4201,7 @@ void TestControlServer::climateGetBucketsTheRequestedHours()
     QVERIFY(body.value("toUtc").isString());
 
     const QJsonArray buckets = body.value("buckets").toArray();
-    QCOMPARE(buckets.count(), 2);
+    QCOMPARE(buckets.count(), 3);
     const QJsonObject latest = buckets.last().toObject();
     QStringList keys = latest.keys();
     keys.sort();
@@ -4200,6 +4209,18 @@ void TestControlServer::climateGetBucketsTheRequestedHours()
     QCOMPARE(latest.value("count").toInt(), 1);
     QCOMPARE(latest.value("temperatureC").toObject().value("mean").toDouble(), 20.0);
     QCOMPARE(latest.value("humidityPercent").toObject().value("max").toDouble(), 60.0);
+
+    const QJsonObject weather = body.value("weather").toObject();
+    QCOMPARE(weather.value("bucketSeconds").toInt(), 3600);
+    const QJsonArray weatherBuckets = weather.value("buckets").toArray();
+    QCOMPARE(weatherBuckets.count(), 2);
+    const QJsonObject hourRain = weatherBuckets.at(0).toObject();
+    QCOMPARE(hourRain.value("precipitationMm").toDouble(), 1.5);
+    QVERIFY(hourRain.value("temperatureC").isNull());
+    QVERIFY(hourRain.value("et0Mm").isNull());
+    const QJsonObject hourEnd = weatherBuckets.at(1).toObject();
+    QVERIFY(hourEnd.value("precipitationMm").isNull());
+    QCOMPARE(hourEnd.value("temperatureC").toDouble(), 21.0);
 
     server.stop(TimeSpan::fromSeconds(5));
 }

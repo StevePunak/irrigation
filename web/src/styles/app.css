@@ -513,6 +513,12 @@ option {
   background: var(--humidity);
 }
 
+.climate-readout__weather {
+  flex-basis: 100%;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .climate-charts {
   display: flex;
   flex-direction: column;
@@ -581,6 +587,49 @@ option {
 .climate-chart__crosshair {
   stroke: var(--ink-dim);
   stroke-width: 1;
+}
+
+.climate-chart__reference {
+  fill: none;
+  stroke: var(--ink-dim);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  stroke-linejoin: round;
+}
+
+.climate-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-left: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.climate-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.climate-legend__line {
+  display: inline-block;
+  width: 16px;
+  border-top: 2px solid var(--ink-dim);
+}
+
+.climate-legend__line--reference {
+  border-top-style: dashed;
+}
+
+.climate-legend__bar {
+  display: inline-block;
+  width: 8px;
+  height: 10px;
+  border-radius: 2px 2px 0 0;
+  background: var(--rain);
 }
 
 .climate-table summary {

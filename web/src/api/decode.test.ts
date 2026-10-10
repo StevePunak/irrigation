@@ -215,6 +215,31 @@ describe('decodeClimateHistory', () => {
     expect(history.buckets[0]!.humidityPercent.max).toBe(71.3)
   })
 
+  it('reads an absent weather block as no weather', () => {
+    expect(decodeClimateHistory(wire).weather).toEqual({ bucketSeconds: 0, buckets: [] })
+  })
+
+  it('decodes the weather buckets and keeps their nulls', () => {
+    const history = decodeClimateHistory({
+      ...wire,
+      weather: {
+        bucketSeconds: 3600,
+        buckets: [
+          { startUtc: '2026-10-10T17:00:00Z', precipitationMm: 0.4, et0Mm: 0.21, temperatureC: null, humidityPercent: 77 },
+        ],
+      },
+    })
+    expect(history.weather.bucketSeconds).toBe(3600)
+    expect(history.weather.buckets).toEqual([
+      { startUtc: '2026-10-10T17:00:00Z', precipitationMm: 0.4, et0Mm: 0.21, temperatureC: null, humidityPercent: 77 },
+    ])
+  })
+
+  it('names the field of a malformed weather bucket', () => {
+    const broken = { ...wire, weather: { bucketSeconds: 3600, buckets: [{ startUtc: 'x', precipitationMm: 'wet' }] } }
+    expect(() => decodeClimateHistory(broken)).toThrow(/climate\.weather\.buckets\[0\]\.precipitationMm/)
+  })
+
   it('names the field of a malformed bucket', () => {
     const broken = { ...wire, buckets: [{ ...wire.buckets[0], humidityPercent: { min: 1, max: 2 } }] }
     expect(() => decodeClimateHistory(broken)).toThrow(DecodeError)

@@ -48,6 +48,23 @@ public:
     /** @brief Returns the stored hours ending at or after @p fromUtc and before @p toUtc, oldest first. */
     WeatherHourList weatherHoursBetween(const QDateTime& fromUtc, const QDateTime& toUtc);
 
+    /**
+     * @brief Returns the stored weather between @p fromUtc and @p toUtc in @p bucketSeconds-wide
+     *        buckets aligned to the epoch, oldest first. See bucketWeather().
+     */
+    WeatherBucketList weatherBucketsBetween(const QDateTime& fromUtc, const QDateTime& toUtc, int bucketSeconds);
+
+    /**
+     * @brief Groups @p hours into @p bucketSeconds-wide buckets aligned to the epoch, oldest first.
+     *
+     * Rain and ET0 count toward the bucket holding the hour they cover, and only hours
+     * starting at or after @p fromUtc and before @p toUtc count. Temperature and humidity
+     * count toward the bucket holding the instant they were taken, within the same range.
+     * A bucket with nothing in it is omitted. @p bucketSeconds must be a whole number of hours.
+     */
+    static WeatherBucketList bucketWeather(const WeatherHourList& hours, const QDateTime& fromUtc,
+                                           const QDateTime& toUtc, int bucketSeconds);
+
     /** @brief Returns the readings taken at or after @p fromUtc and before @p toUtc, oldest first. */
     ClimateReadingList readingsBetween(const QDateTime& fromUtc, const QDateTime& toUtc);
 

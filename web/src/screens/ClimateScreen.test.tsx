@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import ClimateScreen, { rangeText, toFahrenheit } from './ClimateScreen'
+import ClimateScreen, { rangeText, toFahrenheit, toInches } from './ClimateScreen'
 import * as client from '../api/client'
 import { ApiError, type ClimateHistory } from '../api/types'
 import { idleStatus } from '../test/fixtures'
@@ -26,6 +26,7 @@ const history: ClimateHistory = {
       humidityPercent: { min: 70.2, mean: 70.4, max: 70.6 },
     },
   ],
+  weather: { bucketSeconds: 3600, buckets: [] },
 }
 
 beforeEach(() => {
@@ -123,10 +124,77 @@ describe('ClimateScreen', () => {
   })
 })
 
+const withWeather: ClimateHistory = {
+  ...history,
+  weather: {
+    bucketSeconds: 3600,
+    buckets: [
+      { startUtc: '2026-10-10T16:00:00Z', precipitationMm: 2.54, et0Mm: 0.254, temperatureC: 20, humidityPercent: 80 },
+      { startUtc: '2026-10-10T17:00:00Z', precipitationMm: 5.08, et0Mm: 0.508, temperatureC: 21, humidityPercent: 75 },
+      { startUtc: '2026-10-10T18:00:00Z', precipitationMm: null, et0Mm: null, temperatureC: 22, humidityPercent: 70 },
+    ],
+  },
+}
+
+describe('ClimateScreen with Open-Meteo weather', () => {
+  beforeEach(() => {
+    vi.spyOn(client, 'getClimate').mockResolvedValue(withWeather)
+  })
+
+  it('totals the range in the rain chart', async () => {
+    render(<ClimateScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    expect(
+      await screen.findByRole('img', { name: 'Rain and ET₀ from Open-Meteo: 0.30 in of rain and 0.03 in of ET₀ in this range' }),
+    ).toBeInTheDocument()
+  })
+
+  it('reads out the newest value of each measure while nothing is hovered', async () => {
+    render(<ClimateScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const weather = await screen.findByTestId('climate-readout-weather')
+    // 22 °C is 71.6 °F; the 18:00 hour has not finished, so rain and ET₀ come from 17:00.
+    expect(weather).toHaveTextContent('Open-Meteo 72°F · 70% · rain 0.20 in · ET₀ 0.02 in')
+  })
+
+  it('draws Open-Meteo as a labelled reference on both sensor charts', async () => {
+    render(<ClimateScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await screen.findByRole('img', { name: /^Temperature/ })
+
+    expect(screen.getAllByText('Open-Meteo')).toHaveLength(2)
+    expect(screen.getAllByText('Sensor')).toHaveLength(2)
+  })
+
+  it('moves both crosshairs from the rain chart', async () => {
+    const user = userEvent.setup()
+    render(<ClimateScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    const rain = await screen.findByRole('img', { name: /^Rain and ET₀/ })
+    rain.focus()
+    await user.keyboard('{Home}')
+
+    expect(screen.getByTestId('weather-crosshair')).toBeInTheDocument()
+    expect(screen.getAllByTestId('climate-crosshair')).toHaveLength(2)
+    expect(screen.getByTestId('climate-readout-weather')).toHaveTextContent('rain 0.10 in')
+  })
+
+  it('explains an empty weather range', async () => {
+    vi.spyOn(client, 'getClimate').mockResolvedValue(history)
+    render(<ClimateScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByTestId('weather-empty')).toHaveTextContent(/location on the Settings page/)
+    expect(screen.queryByText('Open-Meteo')).toBeNull()
+  })
+})
+
 describe('climate formatting', () => {
   it('converts Celsius to Fahrenheit', () => {
     expect(toFahrenheit(0)).toBe(32)
     expect(toFahrenheit(100)).toBe(212)
+  })
+
+  it('converts millimetres to inches', () => {
+    expect(toInches(25.4)).toBe(1)
   })
 
   it('drops the range when it rounds to one value', () => {
