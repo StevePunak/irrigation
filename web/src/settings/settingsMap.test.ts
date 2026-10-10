@@ -8,6 +8,7 @@ import {
   parseInstant,
   parseInteger,
   parseMasterEnabled,
+  roundCoordinate,
   serializeMasterEnabled,
 } from './settingsMap'
 
@@ -96,5 +97,18 @@ describe('parseCoordinate', () => {
 
   it('refuses a longitude past the antimeridian', () => {
     expect(parseCoordinate('-180.5', LONGITUDE_LIMIT)).toBeNull()
+  })
+})
+
+describe('roundCoordinate', () => {
+  it.each([
+    ['33.463487535940224', '33.46349'],
+    ['-117.65823197849812', '-117.65823'],
+    ['-90', '-90'],
+    ['37.5', '37.5'],
+    ['0.000001', '0'],
+    ['-0.000001', '0'],
+  ])('rounds %s to %s', (text, expected) => {
+    expect(roundCoordinate(text)).toBe(expected)
   })
 })

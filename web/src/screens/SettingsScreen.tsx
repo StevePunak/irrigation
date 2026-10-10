@@ -14,6 +14,7 @@ import {
   parseCoordinate,
   parseInteger,
   parseMasterEnabled,
+  roundCoordinate,
   serializeMasterEnabled,
 } from '../settings/settingsMap'
 import { formatDayAndClock } from '../time/zonedformat'
@@ -71,6 +72,17 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
   )
 
   const masterEnabled = settings === null ? null : parseMasterEnabled(settings[SETTING_KEYS.masterEnabled])
+  const storedCeilingMinutes = Math.round(
+    parseInteger(settings?.[SETTING_KEYS.maxZoneSeconds], DEFAULT_MAX_ZONE_SECONDS) / 60,
+  )
+  const storedMaxZones = parseInteger(settings?.[SETTING_KEYS.maxConcurrentZones], DEFAULT_MAX_CONCURRENT_ZONES)
+  const storedPanelMinutes = parseInteger(settings?.[SETTING_KEYS.panelRunMinutes], DEFAULT_PANEL_RUN_MINUTES)
+  const ceilingDirty = ceilingMinutes !== storedCeilingMinutes
+  const maxZonesDirty = maxZones !== storedMaxZones
+  const panelMinutesDirty = panelMinutes !== storedPanelMinutes
+  const locationDirty =
+    latitude.trim() !== (settings?.[SETTING_KEYS.latitude] ?? '') ||
+    longitude.trim() !== (settings?.[SETTING_KEYS.longitude] ?? '')
   const rainDelayUntil = parseInstant(settings?.[SETTING_KEYS.rainDelayUntil])
   const controllerZone = status?.timezone ?? ''
 
@@ -112,7 +124,11 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
       )
       return
     }
-    void write({ [SETTING_KEYS.latitude]: parsedLatitude, [SETTING_KEYS.longitude]: parsedLongitude })
+    const roundedLatitude = roundCoordinate(parsedLatitude)
+    const roundedLongitude = roundCoordinate(parsedLongitude)
+    setLatitude(roundedLatitude)
+    setLongitude(roundedLongitude)
+    void write({ [SETTING_KEYS.latitude]: roundedLatitude, [SETTING_KEYS.longitude]: roundedLongitude })
   }, [latitude, longitude, write])
 
   const canLocate = typeof navigator !== 'undefined' && 'geolocation' in navigator && window.isSecureContext
@@ -185,8 +201,8 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
               }}
             />
           </label>
-          <button type="button" onClick={onSaveCeiling}>
-            Save ceiling
+          <button type="button" disabled={ceilingDirty === false} onClick={onSaveCeiling}>
+            {ceilingDirty ? 'Save ceiling' : 'Ceiling saved ✓'}
           </button>
 
           <label>
@@ -201,8 +217,8 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
               }}
             />
           </label>
-          <button type="button" onClick={onSaveMaxZones}>
-            Save max zones
+          <button type="button" disabled={maxZonesDirty === false} onClick={onSaveMaxZones}>
+            {maxZonesDirty ? 'Save max zones' : 'Max zones saved ✓'}
           </button>
 
           <label>
@@ -217,8 +233,8 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
               }}
             />
           </label>
-          <button type="button" onClick={onSavePanelMinutes}>
-            Save panel run time
+          <button type="button" disabled={panelMinutesDirty === false} onClick={onSavePanelMinutes}>
+            {panelMinutesDirty ? 'Save panel run time' : 'Panel run time saved ✓'}
           </button>
 
           <h2>Rain delay</h2>
@@ -290,8 +306,8 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
                 {locating ? 'Locating…' : 'Use this device’s location'}
               </button>
             ) : null}
-            <button type="button" onClick={onSaveLocation}>
-              Save location
+            <button type="button" disabled={locationDirty === false} onClick={onSaveLocation}>
+              {locationDirty ? 'Save location' : 'Location saved ✓'}
             </button>
           </div>
         </>

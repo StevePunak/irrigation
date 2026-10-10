@@ -416,4 +416,58 @@ describe('SettingsScreen', () => {
       Reflect.deleteProperty(window, 'isSecureContext')
     }
   })
+
+  it('rounds a long coordinate to five places before saving it', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.type(await screen.findByLabelText(/^latitude/i), '33.463487535940224')
+    await user.type(screen.getByLabelText(/^longitude/i), '-117.65823197849812')
+    await user.click(screen.getByRole('button', { name: 'Save location' }))
+
+    await waitFor(() => {
+      expect(putSettings).toHaveBeenCalledWith({ latitude: '33.46349', longitude: '-117.65823' })
+    })
+    expect(screen.getByLabelText(/^latitude/i)).toHaveValue('33.46349')
+    expect(screen.getByLabelText(/^longitude/i)).toHaveValue('-117.65823')
+  })
+
+  it('shows each save as done until its field changes', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    vi.spyOn(client, 'getSettings').mockResolvedValue({
+      max_zone_seconds: '1800',
+      max_concurrent_zones: '2',
+      panel_run_minutes: '10',
+      latitude: '33.46349',
+      longitude: '-117.65823',
+    })
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    for (const name of ['Ceiling saved ✓', 'Max zones saved ✓', 'Panel run time saved ✓', 'Location saved ✓']) {
+      expect(await screen.findByRole('button', { name })).toBeDisabled()
+    }
+
+    const field = screen.getByLabelText(/gardener panel run time/i)
+    await user.clear(field)
+    await user.type(field, '15')
+    expect(screen.getByRole('button', { name: 'Save panel run time' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: 'Save panel run time' }))
+    expect(await screen.findByRole('button', { name: 'Panel run time saved ✓' })).toBeDisabled()
+  })
+
+  it('keeps a failed save offered', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    vi.spyOn(client, 'putSettings').mockRejectedValue(new Error('database is locked'))
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.type(await screen.findByLabelText(/^latitude/i), '33.46349')
+    await user.type(screen.getByLabelText(/^longitude/i), '-117.65823')
+    await user.click(screen.getByRole('button', { name: 'Save location' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
+    expect(screen.getByRole('button', { name: 'Save location' })).toBeEnabled()
+  })
 })

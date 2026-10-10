@@ -61,3 +61,8 @@ export function parseCoordinate(text: string, limit: number): string | null {
   }
   return normalised
 }
+
+/** Five decimal places is about a metre on the ground. Expects a value parseCoordinate() accepted. */
+export function roundCoordinate(text: string): string {
+  return String(Number(Number(text).toFixed(5)))
+}
