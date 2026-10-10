@@ -537,7 +537,8 @@ idempotent.
 `fired_instants` rows older than 90 days are pruned at startup.
 
 Settings keys: `rain_delay_until` (UTC), `master_enabled`, `max_zone_seconds`,
-`log_level`, `max_concurrent_zones` (1–8, default 2).
+`log_level`, `max_concurrent_zones` (1–8, default 2), and `latitude` /
+`longitude` (decimal degrees, empty until set) locating the yard for weather.
 
 Zone-to-GPIO mapping lives in the daemon's INI settings rather than the
 database. It describes the wiring of a particular box, so changing it must not
@@ -628,7 +629,8 @@ Four screens:
   zone chips with one duration each, a "runs in waves" warning on a step with
   more zones than the cap, computed total runtime assuming waves, next run.
 - **Settings** — rain delay, master enable, maximum zone runtime, max zones at
-  once, zone names.
+  once, the yard's location (typed, or taken from the phone over HTTPS),
+  zone names.
 
 The UI polls `/admin/status` every 2s while a zone is open,
 a program runs, or a program waits; every 15s otherwise.

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_MAX_ZONE_SECONDS,
+  LATITUDE_LIMIT,
+  LONGITUDE_LIMIT,
   SETTING_KEYS,
+  parseCoordinate,
   parseInstant,
   parseInteger,
   parseMasterEnabled,
@@ -75,5 +78,23 @@ describe('SETTING_KEYS', () => {
     expect(SETTING_KEYS.masterEnabled).toBe('master_enabled')
     expect(SETTING_KEYS.maxZoneSeconds).toBe('max_zone_seconds')
     expect(SETTING_KEYS.logLevel).toBe('log_level')
+  })
+})
+
+describe('parseCoordinate', () => {
+  it.each(['0', '-90', '90', '37.77493', ' 37.5 '])('accepts latitude %s', (text) => {
+    expect(parseCoordinate(text, LATITUDE_LIMIT)).toBe(text.trim())
+  })
+
+  it.each(['-180', '180', '-122.41942'])('accepts longitude %s', (text) => {
+    expect(parseCoordinate(text, LONGITUDE_LIMIT)).toBe(text)
+  })
+
+  it.each(['', '90.00001', '+37', '37.', '.5', '3e1', '37.5N', '1234'])('refuses latitude "%s"', (text) => {
+    expect(parseCoordinate(text, LATITUDE_LIMIT)).toBeNull()
+  })
+
+  it('refuses a longitude past the antimeridian', () => {
+    expect(parseCoordinate('-180.5', LONGITUDE_LIMIT)).toBeNull()
   })
 })

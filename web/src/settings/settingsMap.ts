@@ -5,6 +5,8 @@ export const SETTING_KEYS = {
   logLevel: 'log_level',
   maxConcurrentZones: 'max_concurrent_zones',
   panelRunMinutes: 'panel_run_minutes',
+  latitude: 'latitude',
+  longitude: 'longitude',
 } as const
 
 export const DEFAULT_MAX_ZONE_SECONDS = 3600
@@ -43,6 +45,18 @@ export function parseInteger(value: string | undefined, fallback: number): numbe
 export function parseInstant(value: string | undefined): string | null {
   const normalised = (value ?? '').trim()
   if (normalised.length === 0 || Number.isFinite(Date.parse(normalised)) === false) {
+    return null
+  }
+  return normalised
+}
+
+export const LATITUDE_LIMIT = 90
+export const LONGITUDE_LIMIT = 180
+
+/** Mirrors the daemon's check: plain decimal degrees, no exponent or plus sign, within ±limit. */
+export function parseCoordinate(text: string, limit: number): string | null {
+  const normalised = text.trim()
+  if (/^-?\d{1,3}(\.\d+)?$/.test(normalised) === false || Math.abs(Number(normalised)) > limit) {
     return null
   }
   return normalised

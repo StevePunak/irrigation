@@ -343,7 +343,11 @@ void TestDataSource::migratesThePanelRunTimeDefault()
     QVERIFY(query.exec("SELECT sw_version FROM info WHERE id = 1"));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toString(), source.compiledDatabaseVersion());
-    QCOMPARE(source.compiledDatabaseVersion(), QString("1.2.0"));
+    QCOMPARE(source.compiledDatabaseVersion(), QString("1.3.0"));
+
+    QVERIFY(query.exec("SELECT COUNT(*) FROM settings WHERE key IN ('latitude', 'longitude') AND value = ''"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 2);
 }
 
 void TestDataSource::keepsAPanelRunTimeAlreadyStored()

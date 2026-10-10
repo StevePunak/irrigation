@@ -1204,8 +1204,8 @@ void TestControlServer::settingsGetReturnsExactlyTheAllowlistedKeys()
     QStringList keys = body.keys();
     std::sort(keys.begin(), keys.end());
 
-    const QStringList expected = { "log_level", "master_enabled", "max_concurrent_zones", "max_zone_seconds",
-                                   "panel_run_minutes", "rain_delay_until" };
+    const QStringList expected = { "latitude", "log_level", "longitude", "master_enabled", "max_concurrent_zones",
+                                   "max_zone_seconds", "panel_run_minutes", "rain_delay_until" };
     QCOMPARE(keys, expected);
 
     QCOMPARE(body.value("master_enabled").toString(), QString("1"));
@@ -1214,6 +1214,8 @@ void TestControlServer::settingsGetReturnsExactlyTheAllowlistedKeys()
     QCOMPARE(body.value("rain_delay_until").toString(), QString(""));
     QCOMPARE(body.value("max_concurrent_zones").toString(), QString("2"));
     QCOMPARE(body.value("panel_run_minutes").toString(), QString("10"));
+    QCOMPARE(body.value("latitude").toString(), QString(""));
+    QCOMPARE(body.value("longitude").toString(), QString(""));
 
     server.stop(TimeSpan::fromSeconds(5));
 }
@@ -1241,6 +1243,13 @@ void TestControlServer::settingsPutRejectsInvalidValue_data()
     QTest::newRow("panel_run_minutes at the zero boundary") << QString("panel_run_minutes") << QString("0");
     QTest::newRow("panel_run_minutes above the ceiling") << QString("panel_run_minutes") << QString("61");
     QTest::newRow("panel_run_minutes non-numeric") << QString("panel_run_minutes") << QString("ten");
+    QTest::newRow("latitude past the pole") << QString("latitude") << QString("90.00001");
+    QTest::newRow("longitude past the antimeridian") << QString("longitude") << QString("-180.5");
+    QTest::newRow("latitude in exponent form") << QString("latitude") << QString("3e1");
+    QTest::newRow("latitude with a plus sign") << QString("latitude") << QString("+37.5");
+    QTest::newRow("latitude with a trailing point") << QString("latitude") << QString("37.");
+    QTest::newRow("longitude with a leading space") << QString("longitude") << QString(" -122.4");
+    QTest::newRow("longitude with a degree sign") << QString("longitude") << QString("122.4W");
 }
 
 void TestControlServer::settingsPutRejectsInvalidValue()
@@ -1458,6 +1467,11 @@ void TestControlServer::settingsPutAcceptsValidValueAtBothEdges_data()
     QTest::newRow("max_concurrent_zones at the ceiling") << QString("max_concurrent_zones") << QString("8");
     QTest::newRow("panel_run_minutes at the minimum") << QString("panel_run_minutes") << QString("1");
     QTest::newRow("panel_run_minutes at the ceiling") << QString("panel_run_minutes") << QString("60");
+    QTest::newRow("latitude at the south pole") << QString("latitude") << QString("-90");
+    QTest::newRow("latitude with five decimals") << QString("latitude") << QString("37.77493");
+    QTest::newRow("latitude empty clears it") << QString("latitude") << QString("");
+    QTest::newRow("longitude at the antimeridian") << QString("longitude") << QString("180");
+    QTest::newRow("longitude west and negative") << QString("longitude") << QString("-122.41942");
 }
 
 void TestControlServer::settingsPutAcceptsValidValueAtBothEdges()

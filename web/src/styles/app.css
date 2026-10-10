@@ -239,6 +239,11 @@ option {
   color: var(--ink-dim);
 }
 
+.settings-hint {
+  margin: 0;
+  color: var(--ink-dim);
+}
+
 .cap-hint {
   margin: 0;
   color: var(--warn);

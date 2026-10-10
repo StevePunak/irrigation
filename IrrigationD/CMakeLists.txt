@@ -1,6 +1,6 @@
 set(PROJ irrigationd)
 
-set(IRRIGATION_DB_VERSION 1.2.0)
+set(IRRIGATION_DB_VERSION 1.3.0)
 
 find_package(Qt6 6.7 REQUIRED COMPONENTS Core Network HttpServer Sql)
 

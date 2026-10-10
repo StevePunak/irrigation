@@ -73,4 +73,6 @@ INSERT INTO settings (key, value) VALUES
     ('max_zone_seconds',     '3600'),
     ('log_level',            'info'),
     ('max_concurrent_zones', '2'),
-    ('panel_run_minutes',    '10');
+    ('panel_run_minutes',    '10'),
+    ('latitude',             ''),
+    ('longitude',            '');

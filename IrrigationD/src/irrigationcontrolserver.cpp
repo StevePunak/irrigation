@@ -22,6 +22,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTimeZone>
 #include <QUrlQuery>
@@ -29,7 +30,7 @@
 
 const QStringList IrrigationControlServer::SettingsKeys = {
     "rain_delay_until", "master_enabled", "max_zone_seconds", "log_level", "max_concurrent_zones",
-    "panel_run_minutes"
+    "panel_run_minutes", "latitude", "longitude"
 };
 
 // Bounded: the daemon stops this server from its own thread during teardown, and a
@@ -730,6 +731,18 @@ bool IrrigationControlServer::isValidSettingValue(const QString& key, const QStr
         bool ok = false;
         const int minutes = value.toInt(&ok);
         return ok && minutes >= PanelController::MinimumRunMinutes && minutes <= PanelController::MaximumRunMinutes;
+    }
+
+    if(key == "latitude" || key == "longitude") {
+        if(value.isEmpty()) {
+            return true;
+        }
+        static const QRegularExpression decimal("^-?[0-9]{1,3}(\\.[0-9]+)?$");
+        if(decimal.match(value).hasMatch() == false) {
+            return false;
+        }
+        const double limit = key == "latitude" ? 90 : 180;
+        return qAbs(value.toDouble()) <= limit;
     }
 
     return false;

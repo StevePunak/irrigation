@@ -5,10 +5,13 @@ import {
   DEFAULT_MAX_ZONE_SECONDS,
   DEFAULT_MAX_CONCURRENT_ZONES,
   DEFAULT_PANEL_RUN_MINUTES,
+  LATITUDE_LIMIT,
+  LONGITUDE_LIMIT,
   MAX_CONCURRENT_ZONES_LIMIT,
   PANEL_RUN_MINUTES_LIMIT,
   SETTING_KEYS,
   parseInstant,
+  parseCoordinate,
   parseInteger,
   parseMasterEnabled,
   serializeMasterEnabled,
@@ -25,6 +28,9 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
   const [ceilingMinutes, setCeilingMinutes] = useState(DEFAULT_MAX_ZONE_SECONDS / 60)
   const [maxZones, setMaxZones] = useState(DEFAULT_MAX_CONCURRENT_ZONES)
   const [panelMinutes, setPanelMinutes] = useState(DEFAULT_PANEL_RUN_MINUTES)
+  const [latitude, setLatitude] = useState('')
+  const [longitude, setLongitude] = useState('')
+  const [locating, setLocating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -38,6 +44,8 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
       )
       setMaxZones(parseInteger(loadedSettings[SETTING_KEYS.maxConcurrentZones], DEFAULT_MAX_CONCURRENT_ZONES))
       setPanelMinutes(parseInteger(loadedSettings[SETTING_KEYS.panelRunMinutes], DEFAULT_PANEL_RUN_MINUTES))
+      setLatitude(loadedSettings[SETTING_KEYS.latitude] ?? '')
+      setLongitude(loadedSettings[SETTING_KEYS.longitude] ?? '')
       setError(null)
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -89,6 +97,42 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
     }
     void write({ [SETTING_KEYS.panelRunMinutes]: String(panelMinutes) })
   }, [panelMinutes, write])
+
+  const onSaveLocation = useCallback(() => {
+    if (latitude.trim() === '' && longitude.trim() === '') {
+      void write({ [SETTING_KEYS.latitude]: '', [SETTING_KEYS.longitude]: '' })
+      return
+    }
+    const parsedLatitude = parseCoordinate(latitude, LATITUDE_LIMIT)
+    const parsedLongitude = parseCoordinate(longitude, LONGITUDE_LIMIT)
+    if (parsedLatitude === null || parsedLongitude === null) {
+      setError(
+        `Enter both coordinates in decimal degrees: latitude from -${LATITUDE_LIMIT} to ${LATITUDE_LIMIT}, ` +
+          `longitude from -${LONGITUDE_LIMIT} to ${LONGITUDE_LIMIT}. Leave both empty to clear the location.`,
+      )
+      return
+    }
+    void write({ [SETTING_KEYS.latitude]: parsedLatitude, [SETTING_KEYS.longitude]: parsedLongitude })
+  }, [latitude, longitude, write])
+
+  const canLocate = typeof navigator !== 'undefined' && 'geolocation' in navigator && window.isSecureContext
+
+  const onUseThisPhone = useCallback(() => {
+    setError(null)
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocating(false)
+        setLatitude(position.coords.latitude.toFixed(5))
+        setLongitude(position.coords.longitude.toFixed(5))
+      },
+      (failure) => {
+        setLocating(false)
+        setError(`This device would not share its location: ${failure.message}`)
+      },
+      { enableHighAccuracy: true, timeout: 20000 },
+    )
+  }, [])
 
   const onRename = useCallback(
     async (zone: Zone) => {
@@ -205,6 +249,49 @@ export default function SettingsScreen({ status, refresh }: ScreenProps) {
               }}
             >
               Clear rain delay
+            </button>
+          </div>
+
+          <h2>Location</h2>
+
+          <p className="settings-hint">Where the yard is, for rain data. Decimal degrees; west and south are negative.</p>
+
+          <label>
+            Latitude
+            <input
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="37.77493"
+              value={latitude}
+              onChange={(event) => {
+                setLatitude(event.target.value)
+              }}
+            />
+          </label>
+
+          <label>
+            Longitude
+            <input
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="-122.41942"
+              value={longitude}
+              onChange={(event) => {
+                setLongitude(event.target.value)
+              }}
+            />
+          </label>
+
+          <div className="row">
+            {canLocate ? (
+              <button type="button" disabled={locating} onClick={onUseThisPhone}>
+                {locating ? 'Locating…' : 'Use this device’s location'}
+              </button>
+            ) : null}
+            <button type="button" onClick={onSaveLocation}>
+              Save location
             </button>
           </div>
         </>

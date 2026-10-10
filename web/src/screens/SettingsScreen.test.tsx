@@ -321,4 +321,99 @@ describe('SettingsScreen', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/database is locked/i)
   })
+
+  it('shows the stored location', async () => {
+    vi.spyOn(client, 'getSettings').mockResolvedValue({ latitude: '37.77493', longitude: '-122.41942' })
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+    expect(await screen.findByLabelText(/^latitude/i)).toHaveValue('37.77493')
+    expect(screen.getByLabelText(/^longitude/i)).toHaveValue('-122.41942')
+  })
+
+  it('saves both coordinates in one write', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.type(await screen.findByLabelText(/^latitude/i), ' 37.77493 ')
+    await user.type(screen.getByLabelText(/^longitude/i), '-122.41942')
+    await user.click(screen.getByRole('button', { name: 'Save location' }))
+
+    await waitFor(() => {
+      expect(putSettings).toHaveBeenCalledWith({ latitude: '37.77493', longitude: '-122.41942' })
+    })
+  })
+
+  it('clears the location when both fields are empty', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    vi.spyOn(client, 'getSettings').mockResolvedValue({ latitude: '37.77493', longitude: '-122.41942' })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    await user.clear(await screen.findByLabelText(/^latitude/i))
+    await user.clear(screen.getByLabelText(/^longitude/i))
+    await user.click(screen.getByRole('button', { name: 'Save location' }))
+
+    await waitFor(() => {
+      expect(putSettings).toHaveBeenCalledWith({ latitude: '', longitude: '' })
+    })
+  })
+
+  it.each([
+    ['only a latitude', '37.77493', ''],
+    ['a latitude past the pole', '91', '-122.41942'],
+    ['a longitude past the antimeridian', '37.77493', '-181'],
+    ['compass letters', '37.77493N', '122.41942W'],
+  ])('refuses %s', async (_label, latitude, longitude) => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+    if (latitude !== '') {
+      await user.type(await screen.findByLabelText(/^latitude/i), latitude)
+    }
+    if (longitude !== '') {
+      await user.type(await screen.findByLabelText(/^longitude/i), longitude)
+    }
+    await user.click(await screen.findByRole('button', { name: 'Save location' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/decimal degrees/i)
+    expect(putSettings).not.toHaveBeenCalled()
+  })
+
+  it('hides the device-location button outside a secure context', async () => {
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false })
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: { getCurrentPosition: vi.fn() } })
+    try {
+      render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+
+      await screen.findByLabelText(/^latitude/i)
+      expect(screen.queryByRole('button', { name: /use this device/i })).toBeNull()
+    } finally {
+      Reflect.deleteProperty(navigator, 'geolocation')
+      Reflect.deleteProperty(window, 'isSecureContext')
+    }
+  })
+
+  it('fills the fields from the device location, rounded to five places', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true })
+    const getCurrentPosition = vi.fn((success: PositionCallback) => {
+      success({ coords: { latitude: 37.774929123, longitude: -122.419415678 } } as GeolocationPosition)
+    })
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: { getCurrentPosition } })
+    const putSettings = vi.spyOn(client, 'putSettings').mockResolvedValue(undefined)
+
+    try {
+      render(<SettingsScreen status={idleStatus} polls={1} refresh={refresh} />)
+      await user.click(await screen.findByRole('button', { name: /use this device/i }))
+
+      expect(screen.getByLabelText(/^latitude/i)).toHaveValue('37.77493')
+      expect(screen.getByLabelText(/^longitude/i)).toHaveValue('-122.41942')
+      expect(putSettings).not.toHaveBeenCalled()
+    } finally {
+      Reflect.deleteProperty(navigator, 'geolocation')
+      Reflect.deleteProperty(window, 'isSecureContext')
+    }
+  })
 })
