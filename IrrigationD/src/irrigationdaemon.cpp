@@ -14,6 +14,7 @@
 #include "sht30.h"
 #include "stopbutton.h"
 #include "tm1637display.h"
+#include "weatherpoller.h"
 #include "zonecontroller.h"
 
 #include <Kanoop/commonexception.h>
@@ -176,6 +177,9 @@ void IrrigationDaemon::threadAboutToFinish()
     delete _climateLogger;
     _climateLogger = nullptr;
 
+    delete _weatherPoller;
+    _weatherPoller = nullptr;
+
     delete _climateStore;
     _climateStore = nullptr;
 
@@ -242,19 +246,22 @@ void IrrigationDaemon::threadAboutToFinish()
 
 void IrrigationDaemon::setUpClimate()
 {
-    const int bus = _settings->climateBus();
-    if(bus < 0) {
-        logText(LVL_INFO, "No climate sensor is configured");
-        return;
-    }
-
     const QString path = _settings->climateDatabasePath();
     _climateStore = new ClimateDataSource(path);
     if(_climateStore->open() == false) {
-        logText(LVL_ERROR, QString("Failed to open the climate database '%1', so climate logging is off: %2")
+        logText(LVL_ERROR, QString("Failed to open the climate database '%1', so climate logging and weather polling are off: %2")
                                .arg(path, _climateStore->errorText()));
         delete _climateStore;
         _climateStore = nullptr;
+        return;
+    }
+
+    _weatherPoller = new WeatherPoller(_climateStore, &_clock);
+    applyWeatherLocation();
+
+    const int bus = _settings->climateBus();
+    if(bus < 0) {
+        logText(LVL_INFO, "No climate sensor is configured");
         return;
     }
 
@@ -265,6 +272,30 @@ void IrrigationDaemon::setUpClimate()
     logText(LVL_INFO, QString("Logging climate from 0x%1 on I2C bus %2 every %3 s to %4")
                           .arg(static_cast<uint>(_settings->climateAddress()), 2, 16, QChar('0'))
                           .arg(bus).arg(_settings->climateSampleSeconds()).arg(path));
+}
+
+void IrrigationDaemon::applyWeatherLocation()
+{
+    if(_weatherPoller == nullptr) {
+        return;
+    }
+
+    const QString storedLatitude = _dataSource->settingValue("latitude");
+    const QString storedLongitude = _dataSource->settingValue("longitude");
+    bool latitudeParsed = false;
+    bool longitudeParsed = false;
+    const double latitude = storedLatitude.toDouble(&latitudeParsed);
+    const double longitude = storedLongitude.toDouble(&longitudeParsed);
+    if(latitudeParsed == false || longitudeParsed == false
+       || qAbs(latitude) > 90 || qAbs(longitude) > 180) {
+        if(storedLatitude.isEmpty() == false || storedLongitude.isEmpty() == false) {
+            logText(LVL_WARNING, QString("Ignoring the location '%1', '%2'").arg(storedLatitude, storedLongitude));
+        }
+        _weatherPoller->clearLocation();
+        return;
+    }
+
+    _weatherPoller->setLocation(latitude, longitude);
 }
 
 void IrrigationDaemon::connectComponents()
@@ -442,6 +473,7 @@ void IrrigationDaemon::onSettingsChanged()
     }
 
     applyRuntimeSettings();
+    applyWeatherLocation();
     _panelHost->setRunMinutes(_panelRunMinutes);
     _programRunner->fillSlots();
     publishStatus();

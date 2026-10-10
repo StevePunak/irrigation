@@ -174,3 +174,11 @@ irrigation_add_test(tst_climate
     ../src/database/climatedatasource.cpp
     ../src/database/irrigation.qrc
 )
+
+irrigation_add_test(tst_weather
+    tst_weather.cpp
+    ../src/weatherpoller.cpp
+    ../src/json/openmeteojson.cpp
+    ../src/database/climatedatasource.cpp
+    ../src/database/irrigation.qrc
+)

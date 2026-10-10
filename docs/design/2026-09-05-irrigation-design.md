@@ -553,6 +553,39 @@ Storage durability: `journal_mode=WAL`, `synchronous=FULL`, and `/var/log` on
 tmpfs. The device is powered from an unswitched outlet and will lose power
 mid-write.
 
+### Climate database
+
+`climate.db` sits beside the irrigation database and is never pruned. It is
+opened at startup whether or not a sensor is configured.
+
+```
+readings              at_utc, temperature_c, humidity_pct
+
+weather_hours         hour_end_utc (PK), latitude, longitude,
+                      precipitation_mm, et0_mm, temperature_c,
+                      humidity_pct, fetched_at_utc
+
+weather_current       at_utc (PK), latitude, longitude,
+                      precipitation_mm, temperature_c, humidity_pct,
+                      fetched_at_utc
+```
+
+`readings` holds the SHT30's samples. The two weather tables hold Open-Meteo's
+modelled weather for the `latitude` / `longitude` settings, polled every 15
+minutes while both are set. Each poll asks for the last two days, so an outage
+of up to about a day fills in. `weather_hours` keeps only finished hours: rain
+and ET₀ are totals for the hour ending at `hour_end_utc`, and temperature and
+humidity are the values at that instant. `weather_current` keeps one row per
+15-minute step, with rain totalled over the 15 minutes ending at `at_utc`. A
+later poll replaces the row for the same time, because the service revises
+recent values. The coordinates on each row are the ones the poll asked for.
+
+The climate database migrates from scripts under `migrate/climate`. A failed
+migration fails the open and leaves the file alone. It is never recreated,
+because it holds the only copy of the history. Schema 1.1.0 added the weather
+tables. Its durability is `synchronous=NORMAL`: a power cut can
+lose the last few commits.
+
 ## 7. REST API
 
 Served by `QHttpServer` on `127.0.0.1:8080`. nginx proxies `/api/*` to

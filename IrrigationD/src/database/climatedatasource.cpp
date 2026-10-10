@@ -1,9 +1,26 @@
 #include "climatedatasource.h"
 
+#include <Kanoop/database/sqlparser.h>
+
+#include <QDir>
 #include <QFile>
 #include <QSqlQuery>
 #include <QTimeZone>
 #include <QVariant>
+#include <QVersionNumber>
+
+static QVariant optionalValue(const std::optional<double>& value)
+{
+    return value.has_value() ? QVariant(value.value()) : QVariant();
+}
+
+static std::optional<double> optionalDouble(const QVariant& value)
+{
+    if(value.isNull()) {
+        return std::nullopt;
+    }
+    return value.toDouble();
+}
 
 ClimateDataSource::ClimateDataSource(const QString& path) :
     DataSource(DatabaseCredentials(path))
@@ -36,7 +53,65 @@ bool ClimateDataSource::executePostCreateScripts()
 
 bool ClimateDataSource::migrate()
 {
-    return applyPragmas();
+    if(applyPragmas() == false) {
+        return false;
+    }
+
+    bool success = false;
+    QSqlQuery query = executeQuery("SELECT sw_version FROM info WHERE id = 1", &success);
+    if(success == false || query.next() == false) {
+        return false;
+    }
+    const QVersionNumber stored = QVersionNumber::fromString(query.value(0).toString());
+    query.finish();
+
+    const QString directory = ":/database/migrate/climate";
+    QList<QVersionNumber> versions;
+    for(const QString& entry : QDir(directory).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const QVersionNumber version = QVersionNumber::fromString(entry);
+        if(version.isNull() == false && version > stored
+           && version <= QVersionNumber::fromString(schemaVersion())) {
+            versions.append(version);
+        }
+    }
+    std::sort(versions.begin(), versions.end());
+
+    for(const QVersionNumber& version : versions) {
+        if(applyMigration(version.toString()) == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ClimateDataSource::applyMigration(const QString& version)
+{
+    const QString directory = QString(":/database/migrate/climate/%1").arg(version);
+    QStringList statements;
+    for(const QString& script : QDir(directory).entryList(QDir::Files, QDir::Name)) {
+        QFile file(QString("%1/%2").arg(directory, script));
+        if(file.open(QIODevice::ReadOnly) == false) {
+            return false;
+        }
+        SqlParser parser(QString::fromUtf8(file.readAll()));
+        if(parser.isValid() == false) {
+            return false;
+        }
+        statements.append(parser.statements());
+    }
+    statements.append(QString("UPDATE info SET sw_version = '%1' WHERE id = 1").arg(version));
+
+    bool success = false;
+    executeQuery("BEGIN", &success);
+    if(success == false) {
+        return false;
+    }
+    if(executeMultiple(statements) == false) {
+        executeQuery("ROLLBACK");
+        return false;
+    }
+    executeQuery("COMMIT", &success);
+    return success;
 }
 
 bool ClimateDataSource::applyPragmas()
@@ -77,6 +152,92 @@ bool ClimateDataSource::insertReadings(const ClimateReadingList& readings)
         executeQuery("ROLLBACK");
     }
     return success;
+}
+
+bool ClimateDataSource::upsertWeather(const WeatherReport& report)
+{
+    bool success = false;
+    executeQuery("BEGIN", &success);
+    if(success == false) {
+        return false;
+    }
+
+    const qint64 fetchedAt = report.fetchedAtUtc.toSecsSinceEpoch();
+    QSqlQuery hourQuery = prepareQuery(
+        "INSERT OR REPLACE INTO weather_hours "
+        "(hour_end_utc, latitude, longitude, precipitation_mm, et0_mm, temperature_c, humidity_pct, fetched_at_utc) "
+        "VALUES (:end, :latitude, :longitude, :precipitation, :et0, :temperature, :humidity, :fetched)",
+        &success);
+    for(int i = 0; success == true && i < report.hours.count(); i++) {
+        const WeatherHour& hour = report.hours.at(i);
+        hourQuery.bindValue(":end", hour.hourEndUtc.toSecsSinceEpoch());
+        hourQuery.bindValue(":latitude", report.latitude);
+        hourQuery.bindValue(":longitude", report.longitude);
+        hourQuery.bindValue(":precipitation", optionalValue(hour.precipitationMm));
+        hourQuery.bindValue(":et0", optionalValue(hour.et0Mm));
+        hourQuery.bindValue(":temperature", optionalValue(hour.temperatureCelsius));
+        hourQuery.bindValue(":humidity", optionalValue(hour.humidityPercent));
+        hourQuery.bindValue(":fetched", fetchedAt);
+        success = executeQuery(hourQuery);
+    }
+
+    if(success == true && report.current.has_value()) {
+        const WeatherCurrent& current = report.current.value();
+        QSqlQuery currentQuery = prepareQuery(
+            "INSERT OR REPLACE INTO weather_current "
+            "(at_utc, latitude, longitude, precipitation_mm, temperature_c, humidity_pct, fetched_at_utc) "
+            "VALUES (:at, :latitude, :longitude, :precipitation, :temperature, :humidity, :fetched)",
+            &success);
+        if(success == true) {
+            currentQuery.bindValue(":at", current.atUtc.toSecsSinceEpoch());
+            currentQuery.bindValue(":latitude", report.latitude);
+            currentQuery.bindValue(":longitude", report.longitude);
+            currentQuery.bindValue(":precipitation", optionalValue(current.precipitationMm));
+            currentQuery.bindValue(":temperature", optionalValue(current.temperatureCelsius));
+            currentQuery.bindValue(":humidity", optionalValue(current.humidityPercent));
+            currentQuery.bindValue(":fetched", fetchedAt);
+            success = executeQuery(currentQuery);
+        }
+    }
+
+    if(success == true) {
+        executeQuery("COMMIT", &success);
+    }
+    if(success == false) {
+        executeQuery("ROLLBACK");
+    }
+    return success;
+}
+
+WeatherHourList ClimateDataSource::weatherHoursBetween(const QDateTime& fromUtc, const QDateTime& toUtc)
+{
+    WeatherHourList result;
+
+    bool success = false;
+    QSqlQuery query = prepareQuery(
+        "SELECT hour_end_utc, precipitation_mm, et0_mm, temperature_c, humidity_pct FROM weather_hours "
+        "WHERE hour_end_utc >= :from AND hour_end_utc < :to ORDER BY hour_end_utc",
+        &success);
+    if(success == false) {
+        return result;
+    }
+
+    query.bindValue(":from", fromUtc.toSecsSinceEpoch());
+    query.bindValue(":to", toUtc.toSecsSinceEpoch());
+    if(executeQuery(query) == false) {
+        return result;
+    }
+
+    while(query.next()) {
+        WeatherHour hour;
+        hour.hourEndUtc = QDateTime::fromSecsSinceEpoch(query.value(0).toLongLong(), QTimeZone::UTC);
+        hour.precipitationMm = optionalDouble(query.value(1));
+        hour.et0Mm = optionalDouble(query.value(2));
+        hour.temperatureCelsius = optionalDouble(query.value(3));
+        hour.humidityPercent = optionalDouble(query.value(4));
+        result.append(hour);
+    }
+    return result;
 }
 
 ClimateReadingList ClimateDataSource::readingsBetween(const QDateTime& fromUtc, const QDateTime& toUtc)

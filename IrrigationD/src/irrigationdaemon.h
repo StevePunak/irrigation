@@ -27,6 +27,7 @@ class Sht30;
 class Scheduler;
 class StopButton;
 class Tm1637Display;
+class WeatherPoller;
 class ZoneController;
 
 /**
@@ -96,12 +97,20 @@ private:
     void setUpPanel();
 
     /**
-     * @brief Opens the climate database and starts sampling, when climate/bus is configured.
+     * @brief Opens the climate database, starts the weather poller, and starts sampling when
+     *        climate/bus is configured.
      *
-     * A database that fails to open is logged and leaves climate logging off; the daemon
-     * runs on without it.
+     * A database that fails to open is logged and leaves climate logging and weather polling
+     * off; the daemon runs on without them.
      */
     void setUpClimate();
+
+    /**
+     * @brief Points the weather poller at the database latitude and longitude.
+     *
+     * Either one empty or unparsable stops polling.
+     */
+    void applyWeatherLocation();
 
     /**
      * @brief Returns whether threadAboutToFinish() has deleted the components.
@@ -163,6 +172,7 @@ private:
     Sht30* _climateSensor = nullptr;
     ClimateDataSource* _climateStore = nullptr;
     ClimateLogger* _climateLogger = nullptr;
+    WeatherPoller* _weatherPoller = nullptr;
     int _panelRunMinutes = 0;
     bool _displayFailing = false;
 };

@@ -2,6 +2,7 @@
     <qresource prefix="/database">
         <file>schema.sql</file>
         <file>climate-schema.sql</file>
+        <file>migrate/climate/1.1.0/01-weather.sql</file>
         <file>migrate/irrigation/1.0.0/01-initial.sql</file>
         <file>migrate/irrigation/1.1.0/01-program-steps.sql</file>
         <file>migrate/irrigation/1.2.0/01-panel-run-minutes.sql</file>
